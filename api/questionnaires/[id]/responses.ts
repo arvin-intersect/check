@@ -1,7 +1,7 @@
 // api/questionnaires/[id]/responses.ts
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
-import { authenticateRequest } from '../../lib/auth';
+import { authenticateRequest } from '../../lib/auth.js';
 
 const supabase = createClient(
     process.env.SUPABASE_URL!,

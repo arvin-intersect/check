@@ -1,7 +1,8 @@
 // api/questionnaires/[id]/index.ts
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
-import { authenticateRequest } from '../../lib/auth';
+import { authenticateRequest } from '../../lib/auth.js';
+
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Enable CORS
