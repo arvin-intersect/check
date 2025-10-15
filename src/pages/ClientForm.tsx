@@ -1,6 +1,11 @@
 // src/pages/ClientForm.tsx
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useParams } from "react-router-dom";
+import { useForm, FormProvider, useFormContext } from "react-hook-form";
+import { useDebounce } from 'use-debounce';
+import { useQuery, useMutation } from "@tanstack/react-query";
+import jsPDF from 'jspdf';
+
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -8,11 +13,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, PartyPopper, Download } from "lucide-react";
-import { useQuery, useMutation } from "@tanstack/react-query";
-import { useForm, FormProvider, useFormContext } from "react-hook-form";
 import type { Questionnaire, Question as QuestionType, Section as SectionType } from "@/types";
 import { useToast } from "@/hooks/use-toast";
-import jsPDF from 'jspdf';
 import logo from "@/assets/logo.png";
 
 // --- MOCK DATA FOR DEMO PAGE ---
@@ -46,13 +48,16 @@ const fetchFullQuestionnaire = async (id: string): Promise<Questionnaire> => {
     return res.json();
 };
 
-const submitResponse = async (vars: { questionnaire_id: string; answers: any }) => {
+const submitResponse = async (vars: { questionnaire_id: string; respondent_id: string; answers: Record<string, any> }) => {
     const res = await fetch('/api/responses', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(vars),
     });
-    if (!res.ok) throw new Error("Failed to submit your response. Please try again.");
+    if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || "Failed to submit your response. Please try again.");
+    }
     return res.json();
 };
 
@@ -117,37 +122,170 @@ const FormSectionComponent = ({ section, sectionNumber }: { section: SectionType
 
 // --- MAIN COMPONENT ---
 const ClientForm = () => {
-    const { id } = useParams<{ id: string }>();
+    const { id: questionnaireId } = useParams<{ id: string }>();
     const { toast } = useToast();
     const methods = useForm();
     const [isSubmitted, setIsSubmitted] = useState(false);
     const [submittedData, setSubmittedData] = useState<Record<string, any> | null>(null);
     const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
+    const [sessionId, setSessionId] = useState<string | null>(null);
+    const [isRestored, setIsRestored] = useState(false);
+    const [isSaving, setIsSaving] = useState(false);
+    const [saveError, setSaveError] = useState(false);
 
-    const isDemoMode = id === 'demo';
+    const isDemoMode = questionnaireId === 'demo';
 
+    // --- Session ID Management ---
+    useEffect(() => {
+        if (isDemoMode) return;
+        const key = `form-session-id-${questionnaireId}`;
+        let sid = localStorage.getItem(key);
+        if (!sid) {
+            sid = crypto.randomUUID();
+            localStorage.setItem(key, sid);
+        }
+        setSessionId(sid);
+    }, [questionnaireId, isDemoMode]);
+
+    // --- Fetch Questionnaire and Saved Progress ---
     const { data: questionnaire, isLoading, isError, error } = useQuery({
-        queryKey: ['fullQuestionnaire', id],
-        queryFn: () => fetchFullQuestionnaire(id!),
-        enabled: !isDemoMode && !!id,
+        queryKey: ['fullQuestionnaire', questionnaireId],
+        queryFn: () => fetchFullQuestionnaire(questionnaireId!),
+        enabled: !isDemoMode && !!questionnaireId,
     });
-    
-    const mutation = useMutation({
+
+    useQuery({
+        queryKey: ['formProgress', sessionId],
+        queryFn: async () => {
+            if (!sessionId) return null;
+            const res = await fetch(`/api/responses?sessionId=${sessionId}&questionnaireId=${questionnaireId}`);
+            if (!res.ok) return null;
+            const data = await res.json();
+            if (data?.answers) {
+                methods.reset(data.answers);
+            }
+            setIsRestored(true);
+            return data;
+        },
+        enabled: !!sessionId && !!questionnaireId,
+        refetchOnWindowFocus: false,
+    });
+
+    const activeQuestionnaire = isDemoMode ? mockDemoQuestionnaire : questionnaire;
+
+    // --- Autosave Logic ---
+    const formValues = methods.watch();
+    const [debouncedFormValues] = useDebounce(formValues, 2000);
+
+    const saveProgressMutation = useMutation({
+        mutationFn: async (answers: Record<string, any>) => {
+            if (!sessionId || !questionnaireId || isDemoMode) return;
+            
+            const nonEmptyAnswers = Object.fromEntries(
+                Object.entries(answers).filter(([_, value]) => value !== "" && value !== null && value !== undefined)
+            );
+            
+            if (Object.keys(nonEmptyAnswers).length === 0) return;
+
+            const res = await fetch('/api/responses', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    questionnaire_id: questionnaireId,
+                    respondent_id: sessionId,
+                    answers: nonEmptyAnswers,
+                }),
+            });
+
+            if (!res.ok) {
+                throw new Error('Failed to save progress');
+            }
+
+            return res.json();
+        },
+        onMutate: () => {
+            setIsSaving(true);
+            setSaveError(false);
+        },
+        onSuccess: () => {
+            setIsSaving(false);
+            setSaveError(false);
+        },
+        onError: (error) => {
+            console.error("Failed to save progress:", error);
+            setIsSaving(false);
+            setSaveError(true);
+        }
+    });
+
+    const saveProgress = useCallback((values: Record<string, any>) => {
+        if (Object.keys(values).length > 0) {
+            saveProgressMutation.mutate(values);
+        }
+    }, [saveProgressMutation]);
+
+    useEffect(() => {
+        if (isRestored && methods.formState.isDirty) {
+            saveProgress(debouncedFormValues);
+        }
+    }, [debouncedFormValues, isRestored, methods.formState.isDirty, saveProgress]);
+
+    // --- Final Submit Logic ---
+    const finalSubmitMutation = useMutation({
         mutationFn: submitResponse,
         onSuccess: () => {
             setIsSubmitted(true);
+            if (sessionId && questionnaireId) {
+                localStorage.removeItem(`form-session-id-${questionnaireId}`);
+            }
         },
         onError: (e: Error) => {
             toast({ title: "Submission Error", description: e.message, variant: 'destructive' });
         }
     });
 
-    const activeQuestionnaire = isDemoMode ? mockDemoQuestionnaire : questionnaire;
+    const onSubmit = async (data: Record<string, any>) => {
+        // Wait for any pending autosave to complete
+        if (isSaving) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+        }
+
+        const nonEmptyAnswers = Object.fromEntries(
+            Object.entries(data).filter(([_, value]) => value !== "" && value !== null && value !== undefined)
+        );
+
+        if (Object.keys(nonEmptyAnswers).length === 0) {
+            toast({ 
+                title: "No answers provided", 
+                description: "Please answer at least one question before submitting.",
+                variant: 'destructive' 
+            });
+            return;
+        }
+
+        setSubmittedData(nonEmptyAnswers);
+
+        if (isDemoMode) {
+            toast({ title: "Demo Submitted!", description: "This is a sample form. Your answers were not saved." });
+            setIsSubmitted(true);
+            return;
+        }
+
+        if (sessionId) {
+            finalSubmitMutation.mutate({ 
+                questionnaire_id: questionnaireId!, 
+                respondent_id: sessionId, 
+                answers: nonEmptyAnswers 
+            });
+        } else {
+            toast({ title: "Error", description: "Session ID is missing. Cannot submit.", variant: 'destructive' });
+        }
+    };
 
     const handleDownloadPdf = async () => {
         if (!activeQuestionnaire || !submittedData) return;
-
         setIsGeneratingPdf(true);
+        let logoUrl: string | null = null;
 
         try {
             const doc = new jsPDF();
@@ -156,11 +294,10 @@ const ClientForm = () => {
             const margin = 20;
             const contentWidth = pageWidth - (margin * 2);
             let yPos = 20;
-
-            // --- PDF HEADER WITH LOGO ---
-            const logoResponse = await fetch('/logo.png');
+            
+            const logoResponse = await fetch(logo);
             const logoBlob = await logoResponse.blob();
-            const logoUrl = URL.createObjectURL(logoBlob);
+            logoUrl = URL.createObjectURL(logoBlob);
             
             const logoWidth = 30;
             const logoHeight = 10;
@@ -180,43 +317,46 @@ const ClientForm = () => {
             yPos += 15;
             
             activeQuestionnaire.sections?.forEach((section) => {
-                 if (yPos > pageHeight - 30) { doc.addPage(); yPos = margin; }
-                 doc.setFontSize(12);
-                 doc.setFont('helvetica', 'bold');
-                 doc.setTextColor(80);
-                 doc.text(section.title, margin, yPos);
-                 yPos += 8;
-     
-                 section.questions.forEach((question) => {
-                     if (submittedData[question.id]) {
-                         if (yPos > pageHeight - 20) { doc.addPage(); yPos = margin; }
-                         doc.setFontSize(11);
-                         doc.setFont('helvetica', 'bold');
-                         const qText = doc.splitTextToSize(`Q: ${question.prompt}`, contentWidth);
-                         doc.text(qText, margin, yPos);
-                         yPos += (qText.length * 5) + 2;
-     
-                         if (yPos > pageHeight - 20) { doc.addPage(); yPos = margin; }
-                         doc.setFontSize(11);
-                         doc.setFont('helvetica', 'normal');
-                         doc.setTextColor(0);
-                         const aText = doc.splitTextToSize(`A: ${submittedData[question.id]}`, contentWidth - 5);
-                         doc.text(aText, margin + 5, yPos);
-                         yPos += (aText.length * 5) + 10;
-                     }
-                 });
+                if (yPos > pageHeight - 30) { doc.addPage(); yPos = margin; }
+                doc.setFontSize(12);
+                doc.setFont('helvetica', 'bold');
+                doc.setTextColor(80);
+                doc.text(section.title, margin, yPos);
+                yPos += 8;
+    
+                section.questions.forEach((question) => {
+                    if (submittedData[question.id]) {
+                        if (yPos > pageHeight - 20) { doc.addPage(); yPos = margin; }
+                        doc.setFontSize(11);
+                        doc.setFont('helvetica', 'bold');
+                        const qText = doc.splitTextToSize(`Q: ${question.prompt}`, contentWidth);
+                        doc.text(qText, margin, yPos);
+                        yPos += (qText.length * 5) + 2;
+    
+                        if (yPos > pageHeight - 20) { doc.addPage(); yPos = margin; }
+                        doc.setFontSize(11);
+                        doc.setFont('helvetica', 'normal');
+                        doc.setTextColor(0);
+                        const aText = doc.splitTextToSize(`A: ${submittedData[question.id]}`, contentWidth - 5);
+                        doc.text(aText, margin + 5, yPos);
+                        yPos += (aText.length * 5) + 10;
+                    }
+                });
             });
 
             doc.save(`${activeQuestionnaire.organization}-answers.pdf`);
-
         } catch (err: any) {
             console.error(err);
-            toast({
-                title: "Failed to generate PDF",
-                description: err.message || "An unknown error occurred.",
-                variant: "destructive",
+            toast({ 
+                title: "Failed to generate PDF", 
+                description: err.message || "An unknown error occurred.", 
+                variant: "destructive" 
             });
         } finally {
+            // Clean up the blob URL to prevent memory leak
+            if (logoUrl) {
+                URL.revokeObjectURL(logoUrl);
+            }
             setIsGeneratingPdf(false);
         }
     };
@@ -226,18 +366,6 @@ const ClientForm = () => {
         if (element) {
             element.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }
-    };
-
-    const onSubmit = (data: any) => {
-        const nonEmptyAnswers = Object.fromEntries(Object.entries(data).filter(([_, value]) => value !== "" && value !== null));
-        setSubmittedData(nonEmptyAnswers);
-
-        if (isDemoMode) {
-            toast({ title: "Demo Submitted!", description: "This is a sample form. Your answers were not saved." });
-            setIsSubmitted(true);
-            return;
-        }
-        mutation.mutate({ questionnaire_id: id!, answers: nonEmptyAnswers });
     };
 
     if (isLoading && !isDemoMode) return <div className="flex h-screen items-center justify-center"><Loader2 className="h-8 w-8 animate-spin" /> <span className="ml-2">Loading Form...</span></div>;
@@ -252,11 +380,7 @@ const ClientForm = () => {
                 <p className="text-muted-foreground mt-2 max-w-md">Your response has been successfully submitted.</p>
                 <div className="flex gap-4 mt-8">
                     <Button onClick={handleDownloadPdf} disabled={!submittedData || isGeneratingPdf} className="gap-2">
-                        {isGeneratingPdf ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : (
-                            <Download className="h-4 w-4" />
-                        )}
+                        {isGeneratingPdf ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
                         {isGeneratingPdf ? 'Generating...' : 'Download Your Answers'}
                     </Button>
                 </div>
@@ -278,8 +402,7 @@ const ClientForm = () => {
                 </header>
                 
                 <div className="mx-auto max-w-7xl px-6 py-8 flex gap-8">
-                    {/* Sidebar Navigation */}
-                    <aside className="w-64 shrink-0 sticky top-24 self-start">
+                    <aside className="hidden lg:block w-64 shrink-0 sticky top-24 self-start">
                         <div className="border rounded-lg bg-background overflow-hidden" style={{ maxHeight: 'calc(100vh - 120px)' }}>
                             <div className="p-4 border-b bg-muted/30">
                                 <h3 className="font-semibold text-sm">Form Navigation</h3>
@@ -297,13 +420,12 @@ const ClientForm = () => {
                         </div>
                     </aside>
 
-                    {/* Main Form Content */}
                     <main className="flex-1 max-w-4xl">
                         <div className="space-y-16">
                             {activeQuestionnaire.sections?.map((section, index) => (
                                <FormSectionComponent key={section.id} section={section} sectionNumber={index + 1} />
                             ))}
-                             {(!activeQuestionnaire.sections || activeQuestionnaire.sections.length === 0) && (
+                            {(!activeQuestionnaire.sections || activeQuestionnaire.sections.length === 0) && (
                                 <div className="text-center p-8 border rounded-lg">
                                     <p className="text-muted-foreground">This form has no questions yet.</p>
                                 </div>
@@ -313,9 +435,18 @@ const ClientForm = () => {
                 </div>
 
                 <footer className="sticky bottom-0 border-t bg-background/80 backdrop-blur-sm p-4">
-                    <div className="mx-auto max-w-7xl flex justify-end">
-                        <Button type="submit" size="lg" disabled={mutation.isPending}>
-                            {mutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
+                    <div className="mx-auto max-w-7xl flex justify-between items-center">
+                        <span className="text-sm text-muted-foreground transition-opacity duration-300">
+                            {!isDemoMode && isRestored && (
+                                isSaving ? 'Saving...' : saveError ? 'Failed to save changes' : 'All changes saved'
+                            )}
+                        </span>
+                        <Button 
+                            type="submit" 
+                            size="lg" 
+                            disabled={finalSubmitMutation.isPending || isSaving}
+                        >
+                            {finalSubmitMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                             Submit Response
                         </Button>
                     </div>
@@ -324,4 +455,5 @@ const ClientForm = () => {
         </FormProvider>
     );
 };
+
 export default ClientForm;
