@@ -171,7 +171,7 @@ const ClientForm = () => {
             return res.json();
         },
         onSuccess: () => {
-            toast({ title: "Progress Saved", description: "You can close this tab and return later to continue.", });
+            toast({ title: "Progress Saved", description: "Progress Saved.", });
         },
         onError: (error: any) => {
             toast({ title: "Save Error", description: error.message, variant: "destructive" });
