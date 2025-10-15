@@ -78,7 +78,7 @@ const ClientForm = () => {
             return res.json();
         },
         onSuccess: () => {
-            toast({ title: "Progress Saved", description: "Your changes are now visible to others with the link.", });
+            toast({ title: "Progress Saved", description: "Your changes are saved.", });
         },
         onError: (error: any) => {
             toast({ title: "Save Error", description: error.message, variant: "destructive" });
