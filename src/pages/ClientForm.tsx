@@ -1,5 +1,5 @@
 // src/pages/ClientForm.tsx
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams } from "react-router-dom";
 import { useForm, FormProvider, useFormContext } from "react-hook-form";
 import { useDebounce } from 'use-debounce';
@@ -132,6 +132,8 @@ const ClientForm = () => {
     const [isRestored, setIsRestored] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [saveError, setSaveError] = useState(false);
+    const abortControllerRef = useRef<AbortController | null>(null);
+    const lastSavedDataRef = useRef<string>("");
 
     const isDemoMode = questionnaireId === 'demo';
 
@@ -163,6 +165,7 @@ const ClientForm = () => {
             const data = await res.json();
             if (data?.answers) {
                 methods.reset(data.answers);
+                lastSavedDataRef.current = JSON.stringify(data.answers);
             }
             setIsRestored(true);
             return data;
@@ -175,7 +178,7 @@ const ClientForm = () => {
 
     // --- Autosave Logic ---
     const formValues = methods.watch();
-    const [debouncedFormValues] = useDebounce(formValues, 2000);
+    const [debouncedFormValues] = useDebounce(formValues, 3000); // Increased to 3 seconds
 
     const saveProgressMutation = useMutation({
         mutationFn: async (answers: Record<string, any>) => {
@@ -187,6 +190,20 @@ const ClientForm = () => {
             
             if (Object.keys(nonEmptyAnswers).length === 0) return;
 
+            // Check if data has actually changed
+            const currentDataString = JSON.stringify(nonEmptyAnswers);
+            if (currentDataString === lastSavedDataRef.current) {
+                return; // No changes, skip save
+            }
+
+            // Cancel any pending request
+            if (abortControllerRef.current) {
+                abortControllerRef.current.abort();
+            }
+
+            // Create new abort controller for this request
+            abortControllerRef.current = new AbortController();
+
             const res = await fetch('/api/responses', {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
@@ -195,11 +212,15 @@ const ClientForm = () => {
                     respondent_id: sessionId,
                     answers: nonEmptyAnswers,
                 }),
+                signal: abortControllerRef.current.signal,
             });
 
             if (!res.ok) {
                 throw new Error('Failed to save progress');
             }
+
+            // Update last saved data reference
+            lastSavedDataRef.current = currentDataString;
 
             return res.json();
         },
@@ -211,24 +232,40 @@ const ClientForm = () => {
             setIsSaving(false);
             setSaveError(false);
         },
-        onError: (error) => {
-            console.error("Failed to save progress:", error);
-            setIsSaving(false);
-            setSaveError(true);
+        onError: (error: any) => {
+            // Don't show error if request was aborted (user is still typing)
+            if (error.name !== 'AbortError') {
+                console.error("Failed to save progress:", error);
+                setIsSaving(false);
+                setSaveError(true);
+            } else {
+                // Request was cancelled, reset saving state
+                setIsSaving(false);
+            }
         }
     });
 
-    const saveProgress = useCallback((values: Record<string, any>) => {
-        if (Object.keys(values).length > 0) {
-            saveProgressMutation.mutate(values);
-        }
-    }, [saveProgressMutation]);
-
+    // Simplified autosave effect without useCallback dependency issues
     useEffect(() => {
-        if (isRestored && methods.formState.isDirty) {
-            saveProgress(debouncedFormValues);
+        if (!isRestored || !methods.formState.isDirty || isDemoMode) return;
+        
+        const nonEmptyAnswers = Object.fromEntries(
+            Object.entries(debouncedFormValues).filter(([_, value]) => value !== "" && value !== null && value !== undefined)
+        );
+        
+        if (Object.keys(nonEmptyAnswers).length > 0) {
+            saveProgressMutation.mutate(nonEmptyAnswers);
         }
-    }, [debouncedFormValues, isRestored, methods.formState.isDirty, saveProgress]);
+    }, [debouncedFormValues, isRestored, isDemoMode]);
+
+    // Cleanup abort controller on unmount
+    useEffect(() => {
+        return () => {
+            if (abortControllerRef.current) {
+                abortControllerRef.current.abort();
+            }
+        };
+    }, []);
 
     // --- Final Submit Logic ---
     const finalSubmitMutation = useMutation({
@@ -245,6 +282,11 @@ const ClientForm = () => {
     });
 
     const onSubmit = async (data: Record<string, any>) => {
+        // Cancel any pending autosave
+        if (abortControllerRef.current) {
+            abortControllerRef.current.abort();
+        }
+
         // Wait for any pending autosave to complete
         if (isSaving) {
             await new Promise(resolve => setTimeout(resolve, 500));
