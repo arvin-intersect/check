@@ -184,7 +184,7 @@ const ClientForm = () => {
     const { id: questionnaireId } = useParams<{ id: string }>();
     const { toast } = useToast();
     const methods = useForm({ mode: 'onChange' });
-    const { reset, watch } = methods;
+    const { reset } = methods;
     const [isSubmitted, setIsSubmitted] = useState(false);
     const [submittedData, setSubmittedData] = useState<Record<string, any> | null>(null);
     const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
@@ -229,36 +229,28 @@ const ClientForm = () => {
     // Silent Auto-Save Logic
     const autoSaveMutation = useMutation({
         mutationFn: async (answers: Record<string, any>) => {
-            console.log('🔄 Auto-save mutation function called with:', answers);
             if (!questionnaireId || isDemoMode) {
-                console.log('❌ Cannot save - questionnaireId:', questionnaireId, 'isDemoMode:', isDemoMode);
                 throw new Error("Cannot save progress.");
             }
-            console.log('Sending PATCH request to /api/responses');
             const res = await fetch('/api/responses', {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ questionnaire_id: questionnaireId, answers }),
             });
-            console.log('Response status:', res.status);
             if (!res.ok) {
-                const errorText = await res.text();
-                console.error('❌ Auto-save failed:', errorText);
                 throw new Error('Failed to auto-save progress');
             }
             const responseData = await res.json();
-            console.log('✅ Auto-save response:', responseData);
             return { res: responseData, answers };
         },
         onSuccess: ({ answers }) => {
             const now = new Date();
             setLastAutoSaved(now);
             setLastSavedData(JSON.stringify(answers));
-            console.log('✅ Auto-save SUCCESS! Time:', now.toLocaleTimeString());
             reset(answers, { keepDirty: false, keepValues: true });
         },
-        onError: (error: any) => {
-            console.error("❌ Auto-save ERROR:", error.message);
+        onError: () => {
+            // Auto-save errors are handled silently to avoid disrupting the user.
         }
     });
 
@@ -284,53 +276,29 @@ const ClientForm = () => {
         }
     });
     
-    // Auto-save Effect - Using watch instead of isDirty
+    // Auto-save Effect
     useEffect(() => {
-        console.log('Auto-save effect mounted. isDemoMode:', isDemoMode);
-        
         if (isDemoMode) {
-            console.log('Skipping auto-save in demo mode');
             return;
         }
 
-        console.log('Starting auto-save interval (10 seconds)');
-        
         const intervalId = setInterval(() => {
-            console.log('=== Auto-save interval triggered ===');
-            
             const formValues = methods.getValues();
-            console.log('Current form values:', formValues);
             
             const nonEmptyAnswers = Object.fromEntries(
                 Object.entries(formValues).filter(([, value]) => value !== "" && value !== null && value !== undefined)
             );
             
             const currentDataString = JSON.stringify(nonEmptyAnswers);
-            console.log('Current data:', currentDataString);
-            console.log('Last saved data:', lastSavedData);
-            console.log('Has changes:', currentDataString !== lastSavedData);
-            console.log('Number of answers:', Object.keys(nonEmptyAnswers).length);
-            
             const isPending = autoSaveMutation.isPending || saveProgressMutation.isPending || finalSubmitMutation.isPending;
-            console.log('isPending:', isPending);
             
-            // Check if data has changed and has content
+            // Check if data has changed, has content, and no other save is in progress
             if (Object.keys(nonEmptyAnswers).length > 0 && currentDataString !== lastSavedData && !isPending) {
-                console.log('✅ Triggering auto-save mutation');
                 autoSaveMutation.mutate(nonEmptyAnswers);
-            } else {
-                if (Object.keys(nonEmptyAnswers).length === 0) {
-                    console.log('❌ No answers to save');
-                } else if (currentDataString === lastSavedData) {
-                    console.log('❌ No changes detected');
-                } else if (isPending) {
-                    console.log('❌ Save already in progress');
-                }
             }
         }, 10000); // 10 seconds
 
         return () => {
-            console.log('Cleaning up auto-save interval');
             clearInterval(intervalId);
         };
     }, [isDemoMode, autoSaveMutation.isPending, saveProgressMutation.isPending, finalSubmitMutation.isPending, lastSavedData]);
@@ -435,7 +403,6 @@ const ClientForm = () => {
             }); 
             doc.save(`${activeQuestionnaire.organization}-answers.pdf`); 
         } catch (err: any) { 
-            console.error(err); 
             toast({ 
                 title: "Failed to generate PDF", 
                 description: err.message || "An unknown error occurred.", 
