@@ -183,12 +183,13 @@ const FormSectionComponent = ({ section, sectionNumber }: { section: SectionType
 const ClientForm = () => {
     const { id: questionnaireId } = useParams<{ id: string }>();
     const { toast } = useToast();
-    const methods = useForm();
-    const { reset } = methods;
+    const methods = useForm({ mode: 'onChange' });
+    const { reset, watch } = methods;
     const [isSubmitted, setIsSubmitted] = useState(false);
     const [submittedData, setSubmittedData] = useState<Record<string, any> | null>(null);
     const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
     const [lastAutoSaved, setLastAutoSaved] = useState<Date | null>(null);
+    const [lastSavedData, setLastSavedData] = useState<string>('');
     const isDemoMode = questionnaireId === 'demo';
 
     // Fetch Questionnaire
@@ -208,6 +209,7 @@ const ClientForm = () => {
             const data = await res.json();
             if (data?.answers) {
                 methods.reset(data.answers);
+                setLastSavedData(JSON.stringify(data.answers));
             }
             return data;
         },
@@ -227,23 +229,36 @@ const ClientForm = () => {
     // Silent Auto-Save Logic
     const autoSaveMutation = useMutation({
         mutationFn: async (answers: Record<string, any>) => {
-            if (!questionnaireId || isDemoMode) throw new Error("Cannot save progress.");
+            console.log('🔄 Auto-save mutation function called with:', answers);
+            if (!questionnaireId || isDemoMode) {
+                console.log('❌ Cannot save - questionnaireId:', questionnaireId, 'isDemoMode:', isDemoMode);
+                throw new Error("Cannot save progress.");
+            }
+            console.log('Sending PATCH request to /api/responses');
             const res = await fetch('/api/responses', {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ questionnaire_id: questionnaireId, answers }),
             });
-            if (!res.ok) throw new Error('Failed to auto-save progress');
-            return { res: await res.json(), answers };
+            console.log('Response status:', res.status);
+            if (!res.ok) {
+                const errorText = await res.text();
+                console.error('❌ Auto-save failed:', errorText);
+                throw new Error('Failed to auto-save progress');
+            }
+            const responseData = await res.json();
+            console.log('✅ Auto-save response:', responseData);
+            return { res: responseData, answers };
         },
         onSuccess: ({ answers }) => {
             const now = new Date();
             setLastAutoSaved(now);
-            console.log('Progress auto-saved at', now.toLocaleTimeString());
-            reset(answers, { keepDirty: false });
+            setLastSavedData(JSON.stringify(answers));
+            console.log('✅ Auto-save SUCCESS! Time:', now.toLocaleTimeString());
+            reset(answers, { keepDirty: false, keepValues: true });
         },
         onError: (error: any) => {
-            console.error("Auto-save error:", error.message);
+            console.error("❌ Auto-save ERROR:", error.message);
         }
     });
 
@@ -261,14 +276,15 @@ const ClientForm = () => {
         },
         onSuccess: ({ answers }) => {
             toast({ title: "Progress Saved", description: "Your changes have been saved." });
-            reset(answers, { keepDirty: false });
+            setLastSavedData(JSON.stringify(answers));
+            reset(answers, { keepDirty: false, keepValues: true });
         },
         onError: (error: any) => {
             toast({ title: "Save Error", description: error.message, variant: "destructive" });
         }
     });
     
-    // Auto-save Effect
+    // Auto-save Effect - Using watch instead of isDirty
     useEffect(() => {
         console.log('Auto-save effect mounted. isDemoMode:', isDemoMode);
         
@@ -281,34 +297,35 @@ const ClientForm = () => {
         
         const intervalId = setInterval(() => {
             console.log('=== Auto-save interval triggered ===');
-            const isDirty = methods.formState.isDirty;
+            
+            const formValues = methods.getValues();
+            console.log('Current form values:', formValues);
+            
+            const nonEmptyAnswers = Object.fromEntries(
+                Object.entries(formValues).filter(([, value]) => value !== "" && value !== null && value !== undefined)
+            );
+            
+            const currentDataString = JSON.stringify(nonEmptyAnswers);
+            console.log('Current data:', currentDataString);
+            console.log('Last saved data:', lastSavedData);
+            console.log('Has changes:', currentDataString !== lastSavedData);
+            console.log('Number of answers:', Object.keys(nonEmptyAnswers).length);
+            
             const isPending = autoSaveMutation.isPending || saveProgressMutation.isPending || finalSubmitMutation.isPending;
-            
-            console.log('isDirty:', isDirty);
             console.log('isPending:', isPending);
-            console.log('autoSaveMutation.isPending:', autoSaveMutation.isPending);
-            console.log('saveProgressMutation.isPending:', saveProgressMutation.isPending);
-            console.log('finalSubmitMutation.isPending:', finalSubmitMutation.isPending);
             
-            if (isDirty && !isPending) {
-                const formValues = methods.getValues();
-                console.log('Form values:', formValues);
-                
-                const nonEmptyAnswers = Object.fromEntries(
-                    Object.entries(formValues).filter(([, value]) => value !== "" && value !== null && value !== undefined)
-                );
-                
-                console.log('Non-empty answers:', nonEmptyAnswers);
-                console.log('Number of answers:', Object.keys(nonEmptyAnswers).length);
-                
-                if (Object.keys(nonEmptyAnswers).length > 0) {
-                    console.log('✅ Triggering auto-save mutation');
-                    autoSaveMutation.mutate(nonEmptyAnswers);
-                } else {
-                    console.log('❌ No answers to save');
-                }
+            // Check if data has changed and has content
+            if (Object.keys(nonEmptyAnswers).length > 0 && currentDataString !== lastSavedData && !isPending) {
+                console.log('✅ Triggering auto-save mutation');
+                autoSaveMutation.mutate(nonEmptyAnswers);
             } else {
-                console.log('❌ Skipping auto-save - isDirty:', isDirty, 'isPending:', isPending);
+                if (Object.keys(nonEmptyAnswers).length === 0) {
+                    console.log('❌ No answers to save');
+                } else if (currentDataString === lastSavedData) {
+                    console.log('❌ No changes detected');
+                } else if (isPending) {
+                    console.log('❌ Save already in progress');
+                }
             }
         }, 10000); // 10 seconds
 
@@ -316,7 +333,7 @@ const ClientForm = () => {
             console.log('Cleaning up auto-save interval');
             clearInterval(intervalId);
         };
-    }, [isDemoMode, autoSaveMutation.isPending, saveProgressMutation.isPending, finalSubmitMutation.isPending]);
+    }, [isDemoMode, autoSaveMutation.isPending, saveProgressMutation.isPending, finalSubmitMutation.isPending, lastSavedData]);
 
     // Manual Save Handler
     const handleSaveProgress = () => {
