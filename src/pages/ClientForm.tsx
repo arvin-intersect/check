@@ -270,24 +270,52 @@ const ClientForm = () => {
     
     // Auto-save Effect
     useEffect(() => {
-        if (isDemoMode) return;
+        console.log('Auto-save effect mounted. isDemoMode:', isDemoMode);
+        
+        if (isDemoMode) {
+            console.log('Skipping auto-save in demo mode');
+            return;
+        }
 
+        console.log('Starting auto-save interval (10 seconds)');
+        
         const intervalId = setInterval(() => {
+            console.log('=== Auto-save interval triggered ===');
             const isDirty = methods.formState.isDirty;
             const isPending = autoSaveMutation.isPending || saveProgressMutation.isPending || finalSubmitMutation.isPending;
             
+            console.log('isDirty:', isDirty);
+            console.log('isPending:', isPending);
+            console.log('autoSaveMutation.isPending:', autoSaveMutation.isPending);
+            console.log('saveProgressMutation.isPending:', saveProgressMutation.isPending);
+            console.log('finalSubmitMutation.isPending:', finalSubmitMutation.isPending);
+            
             if (isDirty && !isPending) {
                 const formValues = methods.getValues();
+                console.log('Form values:', formValues);
+                
                 const nonEmptyAnswers = Object.fromEntries(
                     Object.entries(formValues).filter(([, value]) => value !== "" && value !== null && value !== undefined)
                 );
+                
+                console.log('Non-empty answers:', nonEmptyAnswers);
+                console.log('Number of answers:', Object.keys(nonEmptyAnswers).length);
+                
                 if (Object.keys(nonEmptyAnswers).length > 0) {
+                    console.log('✅ Triggering auto-save mutation');
                     autoSaveMutation.mutate(nonEmptyAnswers);
+                } else {
+                    console.log('❌ No answers to save');
                 }
+            } else {
+                console.log('❌ Skipping auto-save - isDirty:', isDirty, 'isPending:', isPending);
             }
         }, 10000); // 10 seconds
 
-        return () => clearInterval(intervalId);
+        return () => {
+            console.log('Cleaning up auto-save interval');
+            clearInterval(intervalId);
+        };
     }, [isDemoMode, autoSaveMutation.isPending, saveProgressMutation.isPending, finalSubmitMutation.isPending]);
 
     // Manual Save Handler
