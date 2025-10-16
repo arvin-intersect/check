@@ -29,6 +29,7 @@ const ClientForm = () => {
     const { id: questionnaireId } = useParams<{ id: string }>();
     const { toast } = useToast();
     const methods = useForm();
+    const { getValues, reset } = methods;
     const [isSubmitted, setIsSubmitted] = useState(false);
     const [submittedData, setSubmittedData] = useState<Record<string, any> | null>(null);
     const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
@@ -45,45 +46,88 @@ const ClientForm = () => {
         queryKey: ['formProgress', questionnaireId],
         queryFn: async () => {
             if (!questionnaireId || isDemoMode) return null;
-            // The API now only needs the questionnaireId
             const res = await fetch(`/api/responses?questionnaireId=${questionnaireId}`);
             if (!res.ok) return null;
             const data = await res.json();
             if (data?.answers) {
-                methods.reset(data.answers); // Populate the form with the shared draft
+                methods.reset(data.answers);
             }
             return data;
         },
         enabled: !!questionnaireId && !isDemoMode,
-        refetchOnWindowFocus: true, // Fetch new answers if another user saves progress
+        refetchOnWindowFocus: true,
     });
 
     const activeQuestionnaire = isDemoMode ? mockDemoQuestionnaire : questionnaire;
+    
+    // --- Final Submit Logic (moved up to be available in useEffect) ---
+    const finalSubmitMutation = useMutation({
+        mutationFn: submitResponse,
+        onSuccess: () => setIsSubmitted(true),
+        onError: (e: Error) => toast({ title: "Submission Error", description: e.message, variant: "destructive" }),
+    });
+
+    // --- Silent Auto-Save Logic ---
+    const autoSaveMutation = useMutation({
+        mutationFn: async (answers: Record<string, any>) => {
+            if (!questionnaireId || isDemoMode) throw new Error("Cannot save progress.");
+            const res = await fetch('/api/responses', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ questionnaire_id: questionnaireId, answers }),
+            });
+            if (!res.ok) throw new Error('Failed to auto-save progress');
+            return { res: await res.json(), answers };
+        },
+        onSuccess: ({ answers }) => {
+            console.log('Progress auto-saved at', new Date().toLocaleTimeString());
+            reset(answers, { keepDirty: false });
+        },
+        onError: (error: any) => {
+            console.error("Auto-save error:", error.message);
+        }
+    });
 
     // --- Manual Save Progress Logic ---
     const saveProgressMutation = useMutation({
         mutationFn: async (answers: Record<string, any>) => {
             if (!questionnaireId || isDemoMode) throw new Error("Cannot save progress.");
-            
             const res = await fetch('/api/responses', {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    questionnaire_id: questionnaireId,
-                    answers: answers, // No more respondent_id needed here
-                }),
+                body: JSON.stringify({ questionnaire_id: questionnaireId, answers }),
             });
-
             if (!res.ok) throw new Error('Failed to save progress');
-            return res.json();
+            return { res: await res.json(), answers };
         },
-        onSuccess: () => {
-            toast({ title: "Progress Saved", description: "Your changes are saved.", });
+        onSuccess: ({ answers }) => {
+            toast({ title: "Progress Saved", description: "Your changes have been saved." });
+            reset(answers, { keepDirty: false });
         },
         onError: (error: any) => {
             toast({ title: "Save Error", description: error.message, variant: "destructive" });
         }
     });
+    
+    // --- Auto-save Effect ---
+    useEffect(() => {
+        if (isDemoMode) return;
+
+        const intervalId = setInterval(() => {
+            const isDirty = methods.formState.isDirty;
+            if (isDirty && !autoSaveMutation.isPending && !saveProgressMutation.isPending && !finalSubmitMutation.isPending) {
+                const formValues = getValues();
+                const nonEmptyAnswers = Object.fromEntries(
+                    Object.entries(formValues).filter(([, value]) => value !== "" && value !== null && value !== undefined)
+                );
+                if (Object.keys(nonEmptyAnswers).length > 0) {
+                    autoSaveMutation.mutate(nonEmptyAnswers);
+                }
+            }
+        }, 10000); // 10 seconds
+
+        return () => clearInterval(intervalId);
+    }, [isDemoMode, methods, getValues, autoSaveMutation, saveProgressMutation, finalSubmitMutation, questionnaireId, reset]);
 
     const handleSaveProgress = () => {
         const formValues = methods.getValues();
@@ -97,13 +141,6 @@ const ClientForm = () => {
         }
         saveProgressMutation.mutate(nonEmptyAnswers);
     };
-
-    // --- Final Submit Logic ---
-    const finalSubmitMutation = useMutation({
-        mutationFn: submitResponse,
-        onSuccess: () => setIsSubmitted(true),
-        onError: (e: Error) => toast({ title: "Submission Error", description: e.message, variant: "destructive" }),
-    });
 
     const onSubmit = (data: Record<string, any>) => {
         const nonEmptyAnswers = Object.fromEntries(Object.entries(data).filter(([_, value]) => value !== "" && value !== null && value !== undefined));
