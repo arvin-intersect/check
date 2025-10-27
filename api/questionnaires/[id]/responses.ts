@@ -82,25 +82,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             
             const { answers, questionnaire } = responseData;
 
-            const questionsAndAnswers = Object.entries(answers).map(([qId, answer]) => ({
-                question: questionnaire.sections.flatMap((s: any) => s.questions).find((q: any) => q.id === qId)?.prompt || 'Unknown Question',
-                answer
-            }));
-            
-            const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash-lite' });
-            const contentString = questionsAndAnswers.map((qa) => `Question: ${qa.question}\nAnswer: ${String(qa.answer)}`).join('\n\n');
-            const prompt = `Based on the following client answers, generate 3–5 key discussion points. Format the output as a valid JSON array like [{"title": "...", "content": "..."}]. Client Answers: ${contentString}`;
-
-            const result = await model.generateContent(prompt);
-            let discussionPoints;
-            try {
-                const jsonString = result.response.text().replace(/```json\n?|\n?```/g, '');
-                discussionPoints = JSON.parse(jsonString);
-            } catch {
-                throw new Error('Could not parse discussion points from AI.');
-            }
-            if (!Array.isArray(discussionPoints)) throw new Error('AI response was not an array.');
-
             const accessToken = tokenData.access_token;
             let board: any;
 
@@ -122,40 +103,76 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             const frameHeight = 500;
             const stickyWidth = 250;
             const padding = 30;
+            const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash-lite' });
 
-            // Create the frame
-            const frame = await miroApiRequest(`/boards/${board.id}/frames`, accessToken, {
-                method: 'POST',
-                body: JSON.stringify({
-                    data: {
-                        title: `Response - ${new Date(responseData.submitted_at).toLocaleDateString()}`
-                    },
-                    position: { 
-                        x: 0, 
-                        y: frameCount * (frameHeight + 100) 
-                    },
-                    geometry: { width: frameWidth, height: frameHeight },
-                }),
-            });
+            let currentYPosition = frameCount * (frameHeight + 100);
 
-            // Create sticky notes with positions relative to frame's TOP-LEFT corner
-            for (let i = 0; i < discussionPoints.length; i++) {
-                const point = discussionPoints[i];
+            // Process each section separately
+            for (const section of questionnaire.sections) {
+                // Get questions and answers for this section
+                const sectionQAs = section.questions
+                    .map((q: any) => ({
+                        question: q.prompt,
+                        answer: answers[q.id]
+                    }))
+                    .filter((qa: any) => qa.answer !== undefined && qa.answer !== null && qa.answer !== '');
+
+                // Skip empty sections
+                if (sectionQAs.length === 0) continue;
+
+                // Generate discussion points for this section
+                const contentString = sectionQAs
+                    .map((qa: any) => `Question: ${qa.question}\nAnswer: ${String(qa.answer)}`)
+                    .join('\n\n');
                 
-                // Position relative to TOP-LEFT corner of frame (0,0 is top-left)
-                // Add padding from edges and space them horizontally
-                const x_position = padding + (i * (stickyWidth + padding)) + (stickyWidth / 2);
-                const y_position = frameHeight / 2; // Center vertically in the frame
-                
-                await miroApiRequest(`/boards/${board.id}/sticky_notes`, accessToken, {
+                const prompt = `Based on the following client answers from the "${section.title}" section, generate 2-3 key discussion points or action items. Format the output as a valid JSON array like [{"title": "...", "content": "..."}]. Keep each point concise and actionable. Client Answers: ${contentString}`;
+
+                const result = await model.generateContent(prompt);
+                let discussionPoints;
+                try {
+                    const jsonString = result.response.text().replace(/```json\n?|\n?```/g, '');
+                    discussionPoints = JSON.parse(jsonString);
+                } catch {
+                    console.error('Could not parse discussion points for section:', section.title);
+                    continue;
+                }
+                if (!Array.isArray(discussionPoints) || discussionPoints.length === 0) continue;
+
+                // Create frame for this section
+                const frame = await miroApiRequest(`/boards/${board.id}/frames`, accessToken, {
                     method: 'POST',
                     body: JSON.stringify({
-                        data: { content: `<b>${point.title || ''}</b><br>${point.content || ''}` },
-                        style: { fillColor: 'light_yellow' },
-                        position: { x: x_position, y: y_position },
-                        parent: { id: frame.id },
+                        data: {
+                            title: `${section.title} - ${new Date(responseData.submitted_at).toLocaleDateString()}`
+                        },
+                        position: { 
+                            x: 0, 
+                            y: currentYPosition 
+                        },
+                        geometry: { width: frameWidth, height: frameHeight },
                     }),
                 });
+
+                // Create sticky notes for this section
+                for (let i = 0; i < discussionPoints.length; i++) {
+                    const point = discussionPoints[i];
+                    
+                    const x_position = padding + (i * (stickyWidth + padding)) + (stickyWidth / 2);
+                    const y_position = frameHeight / 2;
+                    
+                    await miroApiRequest(`/boards/${board.id}/sticky_notes`, accessToken, {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            data: { content: `<b>${point.title || ''}</b><br>${point.content || ''}` },
+                            style: { fillColor: 'light_yellow' },
+                            position: { x: x_position, y: y_position },
+                            parent: { id: frame.id },
+                        }),
+                    });
+                }
+
+                // Move to next frame position
+                currentYPosition += frameHeight + 100;
             }
 
             return res.status(200).json({ boardUrl: board.viewLink });
