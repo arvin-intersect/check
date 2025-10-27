@@ -1,4 +1,4 @@
-// REPLACE THIS FILE: src/pages/QuestionnaireDetail.tsx
+// FINAL, CORRECTED CODE for: src/pages/QuestionnaireDetail.tsx
 
 import { useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
@@ -50,7 +50,6 @@ const QuestionnaireDetail = () => {
 
   const exportToMiroMutation = useMutation({
     mutationFn: async (responseId: string) => {
-      // Calls the POST method on our modified endpoint
       return fetchWithAuth(`/api/questionnaires/${questionnaireId}/responses`, {
         method: 'POST',
         body: JSON.stringify({ responseId }),
@@ -73,7 +72,6 @@ const QuestionnaireDetail = () => {
               action: {
                   label: "Connect Miro",
                   onClick: () => {
-                      // Points to the modified health endpoint for auth
                       const authUrl = `/api/health?action=miro_auth&userId=${user.id}`;
                       const authWindow = window.open(authUrl, 'MiroAuth', 'width=600,height=700,popup');
                       const checkWindow = setInterval(() => {
@@ -86,7 +84,7 @@ const QuestionnaireDetail = () => {
               }
           });
       } else {
-          toast.error("Export failed", { description: error.message });
+          toast.error("Export failed", { description: error.message || "An unknown error occurred." });
       }
     },
   });
@@ -110,6 +108,7 @@ const QuestionnaireDetail = () => {
   return (
     <div className="relative min-h-full">
         <ShareDialog open={shareOpen} onOpenChange={setShareOpen} questionnaireId={questionnaireId!} />
+        {/* THIS IS THE CORRECTED LINE */}
         <EditQuestionnaireDialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen} questionnaire={questionnaire}/>
         
         <header className="border-b bg-card/50 backdrop-blur-sm sticky top-16 z-10">
