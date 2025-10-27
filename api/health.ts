@@ -122,28 +122,45 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         auth: { persistSession: false }
       });
 
-      console.log('💾 Storing tokens for user:', userId);
+      console.log('💾 Attempting to store tokens for user:', userId);
+      console.log('🔑 Using service key:', supabaseKey.substring(0, 20) + '...');
 
-      // Use upsert to insert or update
+      // Prepare the data
+      const tokenData = {
+        user_id: userId,
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token || null,
+        updated_at: new Date().toISOString(),
+      };
+
+      console.log('📦 Token data prepared:', {
+        user_id: tokenData.user_id,
+        access_token: tokenData.access_token.substring(0, 20) + '...',
+        has_refresh_token: !!tokenData.refresh_token
+      });
+
+      // Try to upsert
       const { data, error } = await supabase
         .from('miro_tokens')
-        .upsert({
-          user_id: userId,
-          access_token: tokens.access_token,
-          refresh_token: tokens.refresh_token,
-          updated_at: new Date().toISOString(),
-        }, { 
+        .upsert(tokenData, { 
           onConflict: 'user_id',
           ignoreDuplicates: false
         })
         .select();
 
       if (error) {
-        console.error('❌ Supabase error:', JSON.stringify(error, null, 2));
-        throw new Error(`Database error: ${error.message}`);
+        console.error('❌ Supabase error details:', {
+          message: error.message,
+          details: error.details,
+          hint: error.hint,
+          code: error.code,
+          full: JSON.stringify(error, null, 2)
+        });
+        throw new Error(`Database error: ${error.message} (Code: ${error.code})`);
       }
 
-      console.log('✅ Tokens stored successfully:', data);
+      console.log('✅ Tokens stored successfully!');
+      console.log('📊 Result:', data);
 
       // Return success page
       res.setHeader('Content-Type', 'text/html');
