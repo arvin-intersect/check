@@ -1,6 +1,6 @@
-// FINAL, CORRECTED CODE for: src/pages/QuestionnaireDetail.tsx
+// src/pages/QuestionnaireDetail.tsx - FIXED FOR /api/health
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -15,7 +15,7 @@ import { format, formatDistanceToNow } from 'date-fns';
 import { cn } from "@/lib/utils";
 import { useAuth, useUser } from "@clerk/clerk-react";
 import { fetchWithAuth } from "@/lib/apiClient";
-import { toast } from "@/components/ui/sonner";
+import { toast } from "sonner";
 
 const QuestionnaireDetail = () => {
   const { id: questionnaireId } = useParams<{ id: string }>();
@@ -25,6 +25,20 @@ const QuestionnaireDetail = () => {
   const queryClient = useQueryClient();
   const { getToken } = useAuth();
   const { user } = useUser();
+
+  // Listen for Miro auth success from popup
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      if (event.data?.type === 'MIRO_AUTH_SUCCESS') {
+        toast.success("Miro account connected!", {
+          description: "You can now export responses to Miro boards."
+        });
+      }
+    };
+
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, []);
 
   const fetchQuestionnaireAndResponses = async () => {
     if (!questionnaireId) throw new Error("No ID provided");
@@ -72,19 +86,39 @@ const QuestionnaireDetail = () => {
               action: {
                   label: "Connect Miro",
                   onClick: () => {
+                      // Construct auth URL
                       const authUrl = `/api/health?action=miro_auth&userId=${user.id}`;
-                      const authWindow = window.open(authUrl, 'MiroAuth', 'width=600,height=700,popup');
+                      
+                      console.log('🔐 Opening Miro auth window:', authUrl);
+                      
+                      // Open popup
+                      const authWindow = window.open(
+                        authUrl, 
+                        'MiroAuth', 
+                        'width=600,height=700,popup=1,location=1,menubar=0,toolbar=0'
+                      );
+                      
+                      if (!authWindow) {
+                        toast.error("Popup blocked", {
+                          description: "Please allow popups and try again."
+                        });
+                        return;
+                      }
+                      
+                      // Monitor popup closure
                       const checkWindow = setInterval(() => {
                           if (authWindow?.closed) {
                               clearInterval(checkWindow);
-                              toast.info("Miro account connected! Please try exporting again.");
+                              console.log('✅ Auth window closed');
                           }
                       }, 500);
                   }
               }
           });
       } else {
-          toast.error("Export failed", { description: error.message || "An unknown error occurred." });
+          toast.error("Export failed", { 
+            description: error.message || "An unknown error occurred." 
+          });
       }
     },
   });
@@ -108,7 +142,6 @@ const QuestionnaireDetail = () => {
   return (
     <div className="relative min-h-full">
         <ShareDialog open={shareOpen} onOpenChange={setShareOpen} questionnaireId={questionnaireId!} />
-        {/* THIS IS THE CORRECTED LINE */}
         <EditQuestionnaireDialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen} questionnaire={questionnaire}/>
         
         <header className="border-b bg-card/50 backdrop-blur-sm sticky top-16 z-10">
