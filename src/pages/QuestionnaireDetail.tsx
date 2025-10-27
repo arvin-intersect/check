@@ -1,57 +1,94 @@
-// src/pages/QuestionnaireDetail.tsx
+// REPLACE THIS FILE: src/pages/QuestionnaireDetail.tsx
+
 import { useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
-import { ArrowLeft, Edit, Share2, Eye, Loader2, RefreshCw, FilePenLine } from "lucide-react";
+import { ArrowLeft, Edit, Share2, Eye, Loader2, RefreshCw, FilePenLine, Link2 } from "lucide-react";
 import { ShareDialog } from "@/components/questionnaire/ShareDialog";
 import { EditQuestionnaireDialog } from "@/components/questionnaire/EditQuestionnaireDialog";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { Questionnaire, Response as ResponseType, Section } from "@/types";
 import { format, formatDistanceToNow } from 'date-fns';
 import { cn } from "@/lib/utils";
-import { useAuth } from "@clerk/clerk-react";
+import { useAuth, useUser } from "@clerk/clerk-react";
 import { fetchWithAuth } from "@/lib/apiClient";
+import { toast } from "@/components/ui/sonner";
 
 const QuestionnaireDetail = () => {
-  const { id } = useParams<{ id: string }>();
+  const { id: questionnaireId } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [shareOpen, setShareOpen] = useState(false);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const queryClient = useQueryClient();
   const { getToken } = useAuth();
+  const { user } = useUser();
 
   const fetchQuestionnaireAndResponses = async () => {
-    if (!id) throw new Error("No ID provided");
-    
-    // Fetch the full structure publicly first (for question prompts)
-    const questionnaireStructure: Questionnaire = await fetch(`/api/questionnaires/${id}/full`).then(res => {
-      if (!res.ok) throw new Error('Questionnaire structure not found');
-      return res.json();
-    });
-
-    // Fetch the detailed data and responses securely
+    if (!questionnaireId) throw new Error("No ID provided");
     const [questionnaireDetails, responsesData] = await Promise.all([
-      fetchWithAuth(`/api/questionnaires/${id}`, {}, getToken),
-      fetchWithAuth(`/api/questionnaires/${id}/responses`, {}, getToken)
+      fetchWithAuth(`/api/questionnaires/${questionnaireId}`, {}, getToken),
+      fetchWithAuth(`/api/questionnaires/${questionnaireId}/responses`, {}, getToken)
     ]);
+    const questionnaireStructure: Questionnaire = await fetch(`/api/questionnaires/${questionnaireId}/full`).then(res => res.json());
     
-    // Combine public structure with secure details
     const finalQuestionnaire = {
       ...questionnaireStructure,
-      ...questionnaireDetails, // Overwrite with secure data like status, owner
+      ...questionnaireDetails,
       lastEdited: questionnaireDetails.updated_at ? format(new Date(questionnaireDetails.updated_at), "MMM d, yyyy") : 'N/A',
     };
-
     return { questionnaire: finalQuestionnaire, responses: responsesData };
   };
 
   const { data, isLoading, isError, error, isFetching } = useQuery<any, Error>({
-      queryKey: ['questionnaireDetails', id],
+      queryKey: ['questionnaireDetails', questionnaireId],
       queryFn: fetchQuestionnaireAndResponses,
-      enabled: !!id,
+      enabled: !!questionnaireId,
+  });
+
+  const exportToMiroMutation = useMutation({
+    mutationFn: async (responseId: string) => {
+      // Calls the POST method on our modified endpoint
+      return fetchWithAuth(`/api/questionnaires/${questionnaireId}/responses`, {
+        method: 'POST',
+        body: JSON.stringify({ responseId }),
+      }, getToken);
+    },
+    onSuccess: (data) => {
+      toast.success("Successfully exported to Miro!", {
+        description: "A board has been created/updated with the discussion points.",
+        action: {
+          label: "Open Board",
+          onClick: () => window.open(data.boardUrl, '_blank'),
+        },
+        duration: 10000,
+      });
+    },
+    onError: (error: any) => {
+      if (error.action === 'connect_miro' && user?.id) {
+          toast.error("Miro account not connected.", {
+              description: "Please connect your Miro account to enable exporting.",
+              action: {
+                  label: "Connect Miro",
+                  onClick: () => {
+                      // Points to the modified health endpoint for auth
+                      const authUrl = `/api/health?action=miro_auth&userId=${user.id}`;
+                      const authWindow = window.open(authUrl, 'MiroAuth', 'width=600,height=700,popup');
+                      const checkWindow = setInterval(() => {
+                          if (authWindow?.closed) {
+                              clearInterval(checkWindow);
+                              toast.info("Miro account connected! Please try exporting again.");
+                          }
+                      }, 500);
+                  }
+              }
+          });
+      } else {
+          toast.error("Export failed", { description: error.message });
+      }
+    },
   });
 
   const getQuestionPrompt = (sections: Section[] = [], questionId: string): string => {
@@ -62,7 +99,7 @@ const QuestionnaireDetail = () => {
     return `Unknown Question (${questionId.substring(0, 8)}...)`;
   };
   
-  const handleRefetch = () => queryClient.invalidateQueries({ queryKey: ['questionnaireDetails', id] });
+  const handleRefetch = () => queryClient.invalidateQueries({ queryKey: ['questionnaireDetails', questionnaireId] });
   
   if (isLoading) return <div className="flex h-screen items-center justify-center"><Loader2 className="h-8 w-8 animate-spin" /></div>;
   if (isError) return <div className="flex h-screen items-center justify-center text-destructive">Error: {error.message}</div>;
@@ -72,7 +109,7 @@ const QuestionnaireDetail = () => {
 
   return (
     <div className="relative min-h-full">
-        <ShareDialog open={shareOpen} onOpenChange={setShareOpen} questionnaireId={id!} />
+        <ShareDialog open={shareOpen} onOpenChange={setShareOpen} questionnaireId={questionnaireId!} />
         <EditQuestionnaireDialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen} questionnaire={questionnaire}/>
         
         <header className="border-b bg-card/50 backdrop-blur-sm sticky top-16 z-10">
@@ -89,7 +126,7 @@ const QuestionnaireDetail = () => {
                     <div className="flex items-center gap-2">
                         <Button variant="outline" size="icon" onClick={handleRefetch} disabled={isFetching}><RefreshCw className={cn("h-4 w-4", isFetching && "animate-spin")} /></Button>
                         <Button variant="outline" className="gap-2" onClick={() => setShareOpen(true)}><Share2 className="h-4 w-4" />Share</Button>
-                        <Button variant="outline" className="gap-2" onClick={() => navigate(`/form-preview/${id}`)}><Eye className="h-4 w-4" />Preview</Button>
+                        <Button variant="outline" className="gap-2" onClick={() => navigate(`/form-preview/${questionnaireId}`)}><Eye className="h-4 w-4" />Preview</Button>
                         <Button variant="outline" className="gap-2" onClick={() => setIsEditDialogOpen(true)}><FilePenLine className="h-4 w-4" />Edit Details</Button>
                         <Button className="gap-2" onClick={() => navigate(`/builder/${questionnaire.id}`)}><Edit className="h-4 w-4" />Edit Content</Button>
                     </div>
@@ -117,6 +154,12 @@ const QuestionnaireDetail = () => {
                                         </div>
                                     </AccordionTrigger>
                                     <AccordionContent className="p-4 pt-0">
+                                        <div className="flex justify-end mb-4">
+                                            <Button variant="outline" size="sm" onClick={() => exportToMiroMutation.mutate(response.id)} disabled={exportToMiroMutation.isPending}>
+                                                {exportToMiroMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Link2 className="mr-2 h-4 w-4" />}
+                                                Export to Miro Board
+                                            </Button>
+                                        </div>
                                         <div className="bg-muted/50 p-4 rounded-lg space-y-4">
                                             <h4 className="font-semibold text-base">Answers:</h4>
                                             <dl className="text-sm space-y-3">
