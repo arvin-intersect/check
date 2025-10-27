@@ -78,6 +78,8 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.32.0",
+    "@mirohq/miro-api": "^2.2.4",
+    "@mirohq/websdk-types": "^2.17.2",
     "@tailwindcss/typography": "^0.5.16",
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
