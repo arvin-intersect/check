@@ -105,39 +105,37 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 await supabase.from('questionnaires').update({ miro_board_id: board.id }).eq('id', questionnaire.id);
             }
             
-            const existingFrames = await miroApiRequest(`/boards/${board.id}/frames`, accessToken);
-            const frameCount = existingFrames?.data?.length || 0;
-            
-            const frameWidth = (discussionPoints.length * 350) + 50;
-            const frameHeight = 400;
+            // --- SIMPLIFIED LOGIC ---
+            // We will now create all stickies and let Miro place them, then we group them.
 
-            const frame = await miroApiRequest(`/boards/${board.id}/frames`, accessToken, {
-                method: 'POST',
-                body: JSON.stringify({
-                    data: { title: `Response - ${new Date(responseData.submitted_at).toLocaleDateString()}` },
-                    position: { x: 0, y: frameCount * (frameHeight + 100) }, // Position new frames below old ones
-                    geometry: { width: frameWidth, height: frameHeight }
-                })
-            });
-
-            // THIS IS THE CORRECTED LOGIC
-            // Start placing stickies from the left edge of the frame.
-            // The relative x-coordinate starts at -(frameWidth / 2) + (stickyWidth / 2) + padding
-            let x_position = -(frameWidth / 2) + 175; // 175 is roughly half sticky width + padding
-
-            for (const point of discussionPoints) {
-                await miroApiRequest(`/boards/${board.id}/sticky_notes`, accessToken, {
+            // 1. Create all sticky notes without position or parent.
+            const stickyNoteCreationPromises = discussionPoints.map(point => 
+                miroApiRequest(`/boards/${board.id}/sticky_notes`, accessToken, {
                     method: 'POST',
                     body: JSON.stringify({
                         data: { content: `<b>${point.title || ''}</b><br>${point.content || ''}` },
                         style: { fillColor: 'light_yellow' },
-                        // The position is relative to the FRAME'S center. Y=0 keeps it on the horizontal midline.
-                        position: { x: x_position, y: 0 }, 
-                        parent: { id: frame.id }
                     })
-                });
-                x_position += 350; // Move to the right for the next sticky
-            }
+                })
+            );
+
+            const createdStickies = await Promise.all(stickyNoteCreationPromises);
+            const stickyIds = createdStickies.map(sticky => sticky.id);
+
+            // 2. Create a Frame to group them, positioned based on existing frames.
+            const existingFrames = await miroApiRequest(`/boards/${board.id}/frames`, accessToken);
+            const frameCount = existingFrames?.data?.length || 0;
+            
+            const frame = await miroApiRequest(`/boards/${board.id}/frames`, accessToken, {
+                method: 'POST',
+                body: JSON.stringify({
+                    data: { 
+                        title: `Response - ${new Date(responseData.submitted_at).toLocaleDateString()}`,
+                        children: stickyIds // Pass the IDs of the stickies to group them
+                    },
+                    position: { x: 0, y: frameCount * 500 }, // Position the frame itself
+                })
+            });
 
             return res.status(200).json({ boardUrl: board.viewLink });
 
