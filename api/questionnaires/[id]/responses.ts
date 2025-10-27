@@ -1,4 +1,4 @@
-// REPLACE THIS FILE: api/questionnaires/[id]/responses.ts
+// FINAL, CORRECTED CODE: REPLACE api/questionnaires/[id]/responses.ts
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
@@ -10,6 +10,15 @@ const supabase = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SE
     auth: { persistSession: false }
 });
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+
+// Helper function to convert async generator to array
+async function asyncGeneratorToArray<T>(generator: AsyncGenerator<T>): Promise<T[]> {
+    const items: T[] = [];
+    for await (const item of generator) {
+        items.push(item);
+    }
+    return items;
+}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
     res.setHeader('Access-Control-Allow-Credentials', 'true');
@@ -27,7 +36,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const { id: questionnaireId } = req.query;
     if (typeof questionnaireId !== 'string') return res.status(400).json({ error: 'Invalid Questionnaire ID' });
     
-    // --- METHOD: GET (Existing Logic to fetch responses) ---
     if (req.method === 'GET') {
         try {
             const { data, error } = await supabase.from('responses').select('*').eq('questionnaire_id', questionnaireId).order('submitted_at', { ascending: false });
@@ -39,7 +47,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
     }
 
-    // --- METHOD: POST (New Logic to export a single response to Miro) ---
     if (req.method === 'POST') {
         try {
             const userId = claims.sub;
@@ -62,7 +69,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 answer
             }));
             
-            const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+            const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
             const contentString = questionsAndAnswers.map(qa => `Question: ${qa.question}\nAnswer: ${String(qa.answer)}`).join('\n\n');
             const prompt = `Based on the following client answers, generate 3-5 key discussion points. Format the output as a valid JSON array of objects, where each object has "title" and "content" keys. Example: [{"title": "Priority 1", "content": "The client stated..."}, ...]. Client Answers: --- ${contentString} ---`;
             
@@ -71,10 +78,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             try {
                 const jsonString = result.response.text().replace(/```json\n?|\n?```/g, '');
                 discussionPoints = JSON.parse(jsonString);
-            } catch (e) { throw new Error('Could not parse discussion points from AI.'); }
-            if (!Array.isArray(discussionPoints)) throw new Error('AI response was not an array.');
+            } catch (e) { 
+                console.error("Failed to parse Gemini response:", result.response.text());
+                throw new Error('Could not generate discussion points from the AI response.');
+            }
+            if (!Array.isArray(discussionPoints)) throw new Error('AI response was not in the expected array format.');
 
-            const miroApi = new Miro({ auth: { accessToken: tokenData.access_token } }).as('');
+            // THIS IS THE FINAL, CORRECTED INITIALIZATION
+            const miro = new Miro();
+            const miroApi = miro.as(tokenData.access_token);
             let board: Board;
 
             if (questionnaire.miro_board_id) {
@@ -84,10 +96,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 await supabase.from('questionnaires').update({ miro_board_id: board.id }).eq('id', questionnaire.id);
             }
             
-            const existingFrames = await board.getAllItems({ type: 'frame' });
+            const existingFrames = await asyncGeneratorToArray(board.getAllItems({ type: 'frame' }));
+            
             const frame = await board.createFrameItem({
                 data: { title: `Response - ${new Date(responseData.submitted_at).toLocaleDateString()}` },
-                position: { origin: 'center', x: 0, y: existingFrames.length * 500 },
+                position: { 
+                    x: 0, 
+                    y: existingFrames.length * 500 
+                },
                 geometry: { width: (discussionPoints.length * 350) + 50, height: 400 }
             });
 
@@ -97,7 +113,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                     data: { content: `<b>${point.title || ''}</b><br>${point.content || ''}` },
                     position: { x: x_position, y: 0 },
                     style: { fillColor: 'light_yellow' },
-                    parentId: frame.id
+                    parent: {
+                        id: frame.id
+                    }
                 });
                 x_position += 350;
             }
