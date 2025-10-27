@@ -1,5 +1,4 @@
 // FINAL, FIXED CODE — SAFE FOR DEPLOYMENT
-
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
 import { GoogleGenerativeAI } from '@google/generative-ai';
@@ -8,6 +7,7 @@ import { authenticateRequest } from '../../lib/auth.js';
 const supabase = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_KEY!, {
   auth: { persistSession: false }
 });
+
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 
 async function miroApiRequest(endpoint: string, accessToken: string, options: RequestInit = {}) {
@@ -40,6 +40,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     'Access-Control-Allow-Headers',
     'Authorization, X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version'
   );
+
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   const claims = await authenticateRequest(req, res);
@@ -56,6 +57,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .select('*')
         .eq('questionnaire_id', questionnaireId)
         .order('submitted_at', { ascending: false });
+
       if (error) throw error;
       return res.status(200).json(data);
     } catch (error: any) {
@@ -67,6 +69,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     try {
       const userId = claims.sub;
       const { responseId } = req.body;
+
       if (!responseId) return res.status(400).json({ error: 'Response ID is required.' });
 
       const { data: tokenData, error: tokenError } = await supabase
@@ -74,6 +77,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .select('access_token')
         .eq('user_id', userId)
         .single();
+
       if (tokenError || !tokenData)
         return res.status(403).json({ error: 'Miro account not connected.', action: 'connect_miro' });
 
@@ -82,11 +86,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .select('*, questionnaire:questionnaires(*, sections(*, questions(*)))')
         .eq('id', responseId)
         .single();
+
       if (responseError || !responseData)
         return res.status(404).json({ error: 'Questionnaire response not found.' });
 
       const { answers, questionnaire } = responseData;
-
       const questionsAndAnswers = Object.entries(answers).map(([qId, answer]) => ({
         question:
           questionnaire.sections
@@ -99,9 +103,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const contentString = questionsAndAnswers
         .map((qa) => `Question: ${qa.question}\nAnswer: ${String(qa.answer)}`)
         .join('\n\n');
-      const prompt = `Based on the following client answers, generate 3–5 key discussion points. Format the output as valid JSON: [{"title": "...", "content": "..."}].\nClient Answers:\n${contentString}`;
 
+      const prompt = `Based on the following client answers, generate 3–5 key discussion points. Format the output as valid JSON: [{"title": "...", "content": "..."}].\nClient Answers:\n${contentString}`;
       const result = await model.generateContent(prompt);
+
       let discussionPoints;
       try {
         const jsonString = result.response.text().replace(/```json\n?|\n?```/g, '');
@@ -109,6 +114,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       } catch {
         throw new Error('Could not parse discussion points from AI.');
       }
+
       if (!Array.isArray(discussionPoints)) throw new Error('AI response was not an array.');
 
       const accessToken = tokenData.access_token;
@@ -121,6 +127,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           method: 'POST',
           body: JSON.stringify({ name: `Action Items: ${questionnaire.title}` }),
         });
+
         await supabase
           .from('questionnaires')
           .update({ miro_board_id: board.id })
@@ -133,11 +140,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const frameWidth = discussionPoints.length * (stickyWidth + stickyPadding) + stickyPadding;
       const frameHeight = 400;
 
-      // Create frame (no `data.children`)
+      // Create frame with required data object
       const frame = await miroApiRequest(`/boards/${board.id}/frames`, accessToken, {
         method: 'POST',
         body: JSON.stringify({
-          title: `Response - ${new Date(responseData.submitted_at).toLocaleDateString()}`,
+          data: {
+            title: `Response - ${new Date(responseData.submitted_at).toLocaleDateString()}`,
+          },
           position: { x: 0, y: 0 },
           geometry: { width: frameWidth, height: frameHeight },
         }),
@@ -148,6 +157,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       for (let i = 0; i < discussionPoints.length; i++) {
         const point = discussionPoints[i];
         const x_position = startX + i * (stickyWidth + stickyPadding);
+
         await miroApiRequest(`/boards/${board.id}/sticky_notes`, accessToken, {
           method: 'POST',
           body: JSON.stringify({
