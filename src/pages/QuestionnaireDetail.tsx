@@ -1,6 +1,6 @@
-// src/pages/QuestionnaireDetail.tsx - FIXED FOR /api/health
+// FINAL CODE: REPLACE this file at src/pages/QuestionnaireDetail.tsx
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,9 +13,57 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { Questionnaire, Response as ResponseType, Section } from "@/types";
 import { format, formatDistanceToNow } from 'date-fns';
 import { cn } from "@/lib/utils";
-import { useAuth, useUser } from "@clerk/clerk-react";
+import { useAuth } from "@clerk/clerk-react";
 import { fetchWithAuth } from "@/lib/apiClient";
-import { toast } from "sonner";
+import { toast } from "@/components/ui/sonner";
+import { Skeleton } from "@/components/ui/skeleton";
+
+// This component now conditionally renders the export button based on connection status.
+const MiroExportButton = ({ responseId }: { responseId: string }) => {
+    const { getToken } = useAuth();
+    const { id: questionnaireId } = useParams<{ id: string }>();
+
+    const { data: miroStatus, isLoading: isStatusLoading } = useQuery({
+        queryKey: ['miroConnectionStatus'], // Uses the same query key as the UserMenu
+        queryFn: () => fetchWithAuth('/api/health?action=check_miro_status', {}, getToken),
+    });
+
+    const exportToMiroMutation = useMutation({
+        mutationFn: (resId: string) => fetchWithAuth(`/api/questionnaires/${questionnaireId}/responses`, {
+            method: 'POST',
+            body: JSON.stringify({ responseId: resId }),
+        }, getToken),
+        onSuccess: (data) => {
+            toast.success("Successfully exported to Miro!", {
+                description: "A board has been created/updated with the discussion points.",
+                action: { label: "Open Board", onClick: () => window.open(data.boardUrl, '_blank') },
+                duration: 10000,
+            });
+        },
+        onError: (error: any) => {
+            toast.error("Export failed", { 
+                description: error.message || "An unknown error occurred. Make sure your Miro account is connected via the user menu.",
+            });
+        },
+    });
+
+    if (isStatusLoading) {
+        return <Skeleton className="h-9 w-[180px]" />;
+    }
+
+    if (miroStatus?.isConnected) {
+        return (
+            <Button variant="outline" size="sm" onClick={() => exportToMiroMutation.mutate(responseId)} disabled={exportToMiroMutation.isPending}>
+                {exportToMiroMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Link2 className="mr-2 h-4 w-4" />}
+                Export to Miro Board
+            </Button>
+        );
+    }
+    
+    // If not connected, we show nothing here. The button in the header is the primary action.
+    return null;
+};
+
 
 const QuestionnaireDetail = () => {
   const { id: questionnaireId } = useParams<{ id: string }>();
@@ -24,22 +72,7 @@ const QuestionnaireDetail = () => {
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const queryClient = useQueryClient();
   const { getToken } = useAuth();
-  const { user } = useUser();
-
-  // Listen for Miro auth success from popup
-  useEffect(() => {
-    const handleMessage = (event: MessageEvent) => {
-      if (event.data?.type === 'MIRO_AUTH_SUCCESS') {
-        toast.success("Miro account connected!", {
-          description: "You can now export responses to Miro boards."
-        });
-      }
-    };
-
-    window.addEventListener('message', handleMessage);
-    return () => window.removeEventListener('message', handleMessage);
-  }, []);
-
+  
   const fetchQuestionnaireAndResponses = async () => {
     if (!questionnaireId) throw new Error("No ID provided");
     const [questionnaireDetails, responsesData] = await Promise.all([
@@ -61,68 +94,7 @@ const QuestionnaireDetail = () => {
       queryFn: fetchQuestionnaireAndResponses,
       enabled: !!questionnaireId,
   });
-
-  const exportToMiroMutation = useMutation({
-    mutationFn: async (responseId: string) => {
-      return fetchWithAuth(`/api/questionnaires/${questionnaireId}/responses`, {
-        method: 'POST',
-        body: JSON.stringify({ responseId }),
-      }, getToken);
-    },
-    onSuccess: (data) => {
-      toast.success("Successfully exported to Miro!", {
-        description: "A board has been created/updated with the discussion points.",
-        action: {
-          label: "Open Board",
-          onClick: () => window.open(data.boardUrl, '_blank'),
-        },
-        duration: 10000,
-      });
-    },
-    onError: (error: any) => {
-      if (error.action === 'connect_miro' && user?.id) {
-          toast.error("Miro account not connected.", {
-              description: "Please connect your Miro account to enable exporting.",
-              action: {
-                  label: "Connect Miro",
-                  onClick: () => {
-                      // Construct auth URL
-                      const authUrl = `/api/health?action=miro_auth&userId=${user.id}`;
-                      
-                      console.log('🔐 Opening Miro auth window:', authUrl);
-                      
-                      // Open popup
-                      const authWindow = window.open(
-                        authUrl, 
-                        'MiroAuth', 
-                        'width=600,height=700,popup=1,location=1,menubar=0,toolbar=0'
-                      );
-                      
-                      if (!authWindow) {
-                        toast.error("Popup blocked", {
-                          description: "Please allow popups and try again."
-                        });
-                        return;
-                      }
-                      
-                      // Monitor popup closure
-                      const checkWindow = setInterval(() => {
-                          if (authWindow?.closed) {
-                              clearInterval(checkWindow);
-                              console.log('✅ Auth window closed');
-                          }
-                      }, 500);
-                  }
-              }
-          });
-      } else {
-          toast.error("Export failed", { 
-            description: error.message || "An unknown error occurred." 
-          });
-      }
-    },
-  });
-
+  
   const getQuestionPrompt = (sections: Section[] = [], questionId: string): string => {
     for (const section of sections) {
         const question = section.questions.find(q => q.id === questionId);
@@ -187,10 +159,7 @@ const QuestionnaireDetail = () => {
                                     </AccordionTrigger>
                                     <AccordionContent className="p-4 pt-0">
                                         <div className="flex justify-end mb-4">
-                                            <Button variant="outline" size="sm" onClick={() => exportToMiroMutation.mutate(response.id)} disabled={exportToMiroMutation.isPending}>
-                                                {exportToMiroMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Link2 className="mr-2 h-4 w-4" />}
-                                                Export to Miro Board
-                                            </Button>
+                                            <MiroExportButton responseId={response.id} />
                                         </div>
                                         <div className="bg-muted/50 p-4 rounded-lg space-y-4">
                                             <h4 className="font-semibold text-base">Answers:</h4>
