@@ -118,7 +118,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             const existingFrames = await miroApiRequest(`/boards/${board.id}/frames`, accessToken);
             const frameCount = existingFrames?.data?.length || 0;
 
-            const frameHeight = 400;
+            const frameWidth = 1200;
+            const frameHeight = 500;
+            const stickyWidth = 250;
+            const padding = 30;
 
             // Create the frame
             const frame = await miroApiRequest(`/boards/${board.id}/frames`, accessToken, {
@@ -129,22 +132,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                     },
                     position: { 
                         x: 0, 
-                        // Position new frames below existing ones to prevent overlap
                         y: frameCount * (frameHeight + 100) 
                     },
-                    geometry: { width: 1000, height: frameHeight },
+                    geometry: { width: frameWidth, height: frameHeight },
                 }),
             });
 
-            // Create sticky notes without position - let Miro auto-position them
+            // Create sticky notes with positions relative to frame's TOP-LEFT corner
             for (let i = 0; i < discussionPoints.length; i++) {
                 const point = discussionPoints[i];
+                
+                // Position relative to TOP-LEFT corner of frame (0,0 is top-left)
+                // Add padding from edges and space them horizontally
+                const x_position = padding + (i * (stickyWidth + padding)) + (stickyWidth / 2);
+                const y_position = frameHeight / 2; // Center vertically in the frame
                 
                 await miroApiRequest(`/boards/${board.id}/sticky_notes`, accessToken, {
                     method: 'POST',
                     body: JSON.stringify({
                         data: { content: `<b>${point.title || ''}</b><br>${point.content || ''}` },
                         style: { fillColor: 'light_yellow' },
+                        position: { x: x_position, y: y_position },
                         parent: { id: frame.id },
                     }),
                 });
