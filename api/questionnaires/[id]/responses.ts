@@ -72,40 +72,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             const { responseId } = req.body;
             if (!responseId) return res.status(400).json({ error: 'Response ID is required.' });
 
-            // Get Miro Access Token
-            const { data: tokenData, error: tokenError } = await supabase
-                .from('miro_tokens')
-                .select('access_token')
-                .eq('user_id', userId)
-                .single();
+            const { data: tokenData, error: tokenError } = await supabase.from('miro_tokens').select('access_token').eq('user_id', userId).single();
             if (tokenError || !tokenData)
                 return res.status(403).json({ error: 'Miro account not connected.', action: 'connect_miro' });
-
-            // Fetch questionnaire + response
-            const { data: responseData, error: responseError } = await supabase
-                .from('responses')
-                .select('*, questionnaire:questionnaires(*, sections(*, questions(*)))')
-                .eq('id', responseId)
-                .single();
+            
+            const { data: responseData, error: responseError } = await supabase.from('responses').select('*, questionnaire:questionnaires(*, sections(*, questions(*)))').eq('id', responseId).single();
             if (responseError || !responseData)
                 return res.status(404).json({ error: 'Questionnaire response not found.' });
-
+            
             const { answers, questionnaire } = responseData;
 
-            // Flatten all Q&A
             const questionsAndAnswers = Object.entries(answers).map(([qId, answer]) => ({
-                question:
-                    questionnaire.sections
-                        .flatMap((s: any) => s.questions)
-                        .find((q: any) => q.id === qId)?.prompt || 'Unknown Question',
-                answer,
+                question: questionnaire.sections.flatMap((s: any) => s.questions).find((q: any) => q.id === qId)?.prompt || 'Unknown Question',
+                answer
             }));
-
-            // --- Generate discussion points via Gemini ---
+            
             const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash-lite' });
-            const contentString = questionsAndAnswers
-                .map((qa) => `Question: ${qa.question}\nAnswer: ${String(qa.answer)}`)
-                .join('\n\n');
+            const contentString = questionsAndAnswers.map((qa) => `Question: ${qa.question}\nAnswer: ${String(qa.answer)}`).join('\n\n');
             const prompt = `Based on the following client answers, generate 3–5 key discussion points. Format the output as a valid JSON array like [{"title": "...", "content": "..."}]. Client Answers: ${contentString}`;
 
             const result = await model.generateContent(prompt);
@@ -121,7 +104,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             const accessToken = tokenData.access_token;
             let board: any;
 
-            // --- Create or reuse Miro board ---
             if (questionnaire.miro_board_id) {
                 board = await miroApiRequest(`/boards/${questionnaire.miro_board_id}`, accessToken);
             } else {
@@ -129,38 +111,41 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                     method: 'POST',
                     body: JSON.stringify({ name: `Action Items: ${questionnaire.title}` }),
                 });
-                await supabase
-                    .from('questionnaires')
-                    .update({ miro_board_id: board.id })
-                    .eq('id', questionnaire.id);
+                await supabase.from('questionnaires').update({ miro_board_id: board.id }).eq('id', questionnaire.id);
             }
 
-            // --- Create a frame + stickies ---
             const stickyWidth = 300;
             const stickyPadding = 50;
             const frameWidth = discussionPoints.length * (stickyWidth + stickyPadding) + stickyPadding;
             const frameHeight = 400;
-
+            
+            // Re-fetch existing frames to calculate the correct Y position for the new frame
             const existingFrames = await miroApiRequest(`/boards/${board.id}/frames`, accessToken);
             const frameCount = existingFrames?.data?.length || 0;
-            
-            // ✅ THIS IS THE CORRECTED FRAME CREATION PAYLOAD
+
+            // Create the frame with the correct payload and position
             const frame = await miroApiRequest(`/boards/${board.id}/frames`, accessToken, {
                 method: 'POST',
                 body: JSON.stringify({
                     data: {
                         title: `Response - ${new Date(responseData.submitted_at).toLocaleDateString()}`
                     },
-                    position: { x: 0, y: frameCount * (frameHeight + 100) },
+                    position: { 
+                        x: 0, 
+                        // Position new frames below existing ones to prevent overlap
+                        y: frameCount * (frameHeight + 100) 
+                    },
                     geometry: { width: frameWidth, height: frameHeight },
                 }),
             });
 
-            // --- Add sticky notes inside the frame ---
-            const startX = -(frameWidth / 2) + stickyWidth / 2 + stickyPadding;
+            // Calculate the starting position for the first sticky note, relative to the frame's center
+            const startX = -(frameWidth / 2) + (stickyWidth / 2) + stickyPadding;
+
             for (let i = 0; i < discussionPoints.length; i++) {
                 const point = discussionPoints[i];
-                const x_position = startX + i * (stickyWidth + stickyPadding);
+                const x_position = startX + (i * (stickyWidth + stickyPadding));
+                
                 await miroApiRequest(`/boards/${board.id}/sticky_notes`, accessToken, {
                     method: 'POST',
                     body: JSON.stringify({
