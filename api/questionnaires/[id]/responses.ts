@@ -114,16 +114,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 await supabase.from('questionnaires').update({ miro_board_id: board.id }).eq('id', questionnaire.id);
             }
 
-            const stickyWidth = 300;
-            const stickyPadding = 50;
-            const frameWidth = discussionPoints.length * (stickyWidth + stickyPadding) + stickyPadding;
-            const frameHeight = 400;
-            
             // Re-fetch existing frames to calculate the correct Y position for the new frame
             const existingFrames = await miroApiRequest(`/boards/${board.id}/frames`, accessToken);
             const frameCount = existingFrames?.data?.length || 0;
 
-            // Create the frame with the correct payload and position
+            const frameHeight = 400;
+
+            // Create the frame
             const frame = await miroApiRequest(`/boards/${board.id}/frames`, accessToken, {
                 method: 'POST',
                 body: JSON.stringify({
@@ -135,23 +132,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                         // Position new frames below existing ones to prevent overlap
                         y: frameCount * (frameHeight + 100) 
                     },
-                    geometry: { width: frameWidth, height: frameHeight },
+                    geometry: { width: 1000, height: frameHeight },
                 }),
             });
 
-            // Calculate the starting position for the first sticky note, relative to the frame's center
-            const startX = -(frameWidth / 2) + (stickyWidth / 2) + stickyPadding;
-
+            // Create sticky notes without position - let Miro auto-position them
             for (let i = 0; i < discussionPoints.length; i++) {
                 const point = discussionPoints[i];
-                const x_position = startX + (i * (stickyWidth + stickyPadding));
                 
                 await miroApiRequest(`/boards/${board.id}/sticky_notes`, accessToken, {
                     method: 'POST',
                     body: JSON.stringify({
                         data: { content: `<b>${point.title || ''}</b><br>${point.content || ''}` },
                         style: { fillColor: 'light_yellow' },
-                        position: { x: x_position, y: 0 },
                         parent: { id: frame.id },
                     }),
                 });
