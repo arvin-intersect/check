@@ -27,14 +27,13 @@ async function miroApiRequest(endpoint: string, accessToken: string, options: Re
         console.error(`Miro API request to '${endpoint}' failed with status ${response.status}:`, errorBody);
         throw new Error(`Miro API Error: ${errorBody}`);
     }
-    // Handle cases like DELETE where there is no body
     if (response.status === 204) return null;
 
     return response.json();
 }
 
-
 export default async function handler(req: VercelRequest, res: VercelResponse) {
+    // CORS Headers
     res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -51,7 +50,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (typeof questionnaireId !== 'string') return res.status(400).json({ error: 'Invalid Questionnaire ID' });
     
     if (req.method === 'GET') {
-        // This part remains the same
         try {
             const { data, error } = await supabase.from('responses').select('*').eq('questionnaire_id', questionnaireId).order('submitted_at', { ascending: false });
             if (error) throw error;
@@ -77,14 +75,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             
             const { answers, questionnaire } = responseData;
 
-            // Generate summary with Gemini AI (no changes here)
             const questionsAndAnswers = Object.entries(answers).map(([qId, answer]) => ({
                 question: questionnaire.sections.flatMap((s: any) => s.questions).find((q: any) => q.id === qId)?.prompt || 'Unknown Question',
                 answer
             }));
+            
             const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
             const contentString = questionsAndAnswers.map(qa => `Question: ${qa.question}\nAnswer: ${String(qa.answer)}`).join('\n\n');
             const prompt = `Based on the following client answers, generate 3-5 key discussion points. Format the output as a valid JSON array of objects, where each object has "title" and "content" keys. Example: [{"title": "Priority 1", "content": "The client stated..."}, ...]. Client Answers: --- ${contentString} ---`;
+            
             const result = await model.generateContent(prompt);
             let discussionPoints;
             try {
@@ -93,7 +92,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             } catch (e) { throw new Error('Could not parse discussion points from AI.'); }
             if (!Array.isArray(discussionPoints)) throw new Error('AI response was not an array.');
 
-            // --- REPLACED MIRO SDK LOGIC WITH DIRECT FETCH CALLS ---
             const accessToken = tokenData.access_token;
             let board: any;
 
@@ -110,27 +108,35 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             const existingFrames = await miroApiRequest(`/boards/${board.id}/frames`, accessToken);
             const frameCount = existingFrames?.data?.length || 0;
             
+            const frameWidth = (discussionPoints.length * 350) + 50;
+            const frameHeight = 400;
+
             const frame = await miroApiRequest(`/boards/${board.id}/frames`, accessToken, {
                 method: 'POST',
                 body: JSON.stringify({
                     data: { title: `Response - ${new Date(responseData.submitted_at).toLocaleDateString()}` },
-                    position: { x: 0, y: frameCount * 500 },
-                    geometry: { width: (discussionPoints.length * 350) + 50, height: 400 }
+                    position: { x: 0, y: frameCount * (frameHeight + 100) }, // Position new frames below old ones
+                    geometry: { width: frameWidth, height: frameHeight }
                 })
             });
 
-            let x_position = -(frame.geometry.width / 2) + 200; // Start positioning relative to the frame's center
+            // THIS IS THE CORRECTED LOGIC
+            // Start placing stickies from the left edge of the frame.
+            // The relative x-coordinate starts at -(frameWidth / 2) + (stickyWidth / 2) + padding
+            let x_position = -(frameWidth / 2) + 175; // 175 is roughly half sticky width + padding
+
             for (const point of discussionPoints) {
                 await miroApiRequest(`/boards/${board.id}/sticky_notes`, accessToken, {
                     method: 'POST',
                     body: JSON.stringify({
                         data: { content: `<b>${point.title || ''}</b><br>${point.content || ''}` },
                         style: { fillColor: 'light_yellow' },
-                        position: { x: x_position, y: 0 },
+                        // The position is relative to the FRAME'S center. Y=0 keeps it on the horizontal midline.
+                        position: { x: x_position, y: 0 }, 
                         parent: { id: frame.id }
                     })
                 });
-                x_position += 350;
+                x_position += 350; // Move to the right for the next sticky
             }
 
             return res.status(200).json({ boardUrl: board.viewLink });
