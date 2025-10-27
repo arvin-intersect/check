@@ -84,9 +84,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             }
             if (!Array.isArray(discussionPoints)) throw new Error('AI response was not in the expected array format.');
 
-            // THIS IS THE FINAL, CORRECTED INITIALIZATION
-            const miro = new Miro();
+            // --- THIS IS THE FINAL, CORRECTED INITIALIZATION ---
+            const miro = new Miro({
+                clientId: process.env.MIRO_CLIENT_ID,
+                clientSecret: process.env.MIRO_CLIENT_SECRET,
+                redirectUrl: process.env.MIRO_REDIRECT_URI
+            });
             const miroApi = miro.as(tokenData.access_token);
+            // --- END OF FIX ---
+
             let board: Board;
 
             if (questionnaire.miro_board_id) {
