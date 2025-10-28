@@ -15,13 +15,13 @@ import { useAuth } from "@clerk/clerk-react";
 import { fetchWithAuth } from "@/lib/apiClient";
 import type { WorkshopBoard, Insight, Questionnaire, Response as ResponseType } from "@/types";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Separator } from "@/components/ui/separator"; // CORRECTED: Added Separator import
+import { Separator } from "@/components/ui/separator";
 
 import { RapidReviewCard } from "@/components/workshop/RapidReviewCard";
 import { RightRail } from "@/components/workshop/RightRail";
 import { Skeleton } from "@/components/ui/skeleton";
 
-
+// --- Helper Functions (No changes) ---
 const transformDataToInsights = (questionnaire: Questionnaire, responses: ResponseType[]): Insight[] => {
   const insights: Insight[] = [];
   const questionMap = new Map();
@@ -30,47 +30,77 @@ const transformDataToInsights = (questionnaire: Questionnaire, responses: Respon
       questionMap.set(q.id, { prompt: q.prompt, sectionTitle: section.title });
     });
   });
-
   responses.forEach(response => {
     Object.entries(response.answers).forEach(([questionId, answer]) => {
       const questionDetails = questionMap.get(questionId);
       if (questionDetails && answer) {
-        insights.push({
-          id: `${response.id}-${questionId}`,
-          questionId: questionId,
-          questionPrompt: questionDetails.prompt,
-          sectionTitle: questionDetails.sectionTitle,
-          answer: String(answer),
-          respondentId: response.respondent_id,
-          aiHeading: '',
-          aiSummary: '',
-          tags: [],
-        });
+        insights.push({ id: `${response.id}-${questionId}`, questionId, questionPrompt: questionDetails.prompt, sectionTitle: questionDetails.sectionTitle, answer: String(answer), respondentId: response.respondent_id, aiHeading: '', aiSummary: '', tags: [] });
       }
     });
   });
   return insights;
 };
 
-const WorkshopSetup = ({ onSetupComplete }) => {
+// --- CORRECTED WorkshopSetup Component ---
+const WorkshopSetup = ({ onSetupComplete, getToken }) => {
   const [step, setStep] = useState(1);
   const [selectedForm, setSelectedForm] = useState<string | null>(null);
+  
+  // --- REAL DATA FETCHING ---
+  const { data: questionnaires, isLoading, isError } = useQuery<Questionnaire[]>({
+    queryKey: ['questionnairesList'],
+    queryFn: async () => {
+      // Fetching from the same endpoint as your dashboard
+      return fetchWithAuth('/api/questionnaires', {}, getToken);
+    },
+    staleTime: 5 * 60 * 1000, // Cache for 5 minutes
+  });
+
   const defaultBoards: WorkshopBoard[] = [ { id: 'b1', name: 'Vision Board', description: 'High-level goals and desired outcomes.' }, { id: 'b2', name: 'Challenges/Opportunities', description: 'Obstacles and potential growth areas.' }, ];
   const [boards, setBoards] = useState<WorkshopBoard[]>(defaultBoards);
   const handleBoardChange = (index, field, value) => { const newBoards = [...boards]; newBoards[index][field] = value; setBoards(newBoards); };
   const addBoard = () => setBoards([...boards, { id: `b${Date.now()}`, name: '', description: '' }]);
   const removeBoard = (index) => setBoards(boards.filter((_, i) => i !== index));
 
-  if (step === 1) return ( <Card className="w-full max-w-2xl mx-auto"> <CardHeader><CardTitle>Step 1: Select Data Source</CardTitle><CardDescription>Choose the questionnaire responses you want to analyze.</CardDescription></CardHeader> <CardContent className="space-y-4 pt-4"> <Label>Select Client Form</Label> <Select onValueChange={setSelectedForm}> <SelectTrigger><SelectValue placeholder="Search and select a questionnaire..." /></SelectTrigger> <SelectContent> <SelectItem value="c0a0f7b5-3b9e-4b6e-8a6a-8c8a8a8a8a8a">TechCorp AI Readiness Assessment (Sample)</SelectItem> <SelectItem value="d1b1e8c6-4c9f-5c7f-9b7b-9d9b9b9b9b9b">Innovate LLC Q2 Discovery (Sample)</SelectItem> </SelectContent> </Select> <Button onClick={() => setStep(2)} disabled={!selectedForm} className="w-full">Next: Design Workshop</Button> </CardContent> </Card> );
-  if (step === 2) return ( <Card className="w-full max-w-3xl mx-auto"> <CardHeader><CardTitle>Step 2: Design Your Workshop Boards</CardTitle><CardDescription>These boards will be used to categorize insights.</CardDescription></CardHeader> <CardContent className="space-y-4 pt-4"> {boards.map((board, index) => ( <div key={board.id} className="flex items-start gap-2 p-3 border rounded-lg bg-muted/30"> <div className="flex-1 grid grid-cols-2 gap-4"> <Input placeholder="Board Name (e.g., Vision)" value={board.name} onChange={e => handleBoardChange(index, 'name', e.target.value)} /> <Textarea placeholder="Short description" value={board.description} onChange={e => handleBoardChange(index, 'description', e.target.value)} rows={1} className="h-10"/> </div> <Button variant="ghost" size="icon" onClick={() => removeBoard(index)}><X className="h-4 w-4"/></Button> </div> ))} <Button variant="outline" onClick={addBoard} className="gap-2"><Plus className="h-4 w-4"/>Add Board</Button> <div className="flex justify-between items-center pt-4"> <Button variant="link" onClick={() => setStep(1)}>Back</Button> <Button onClick={() => onSetupComplete({ formId: selectedForm, boards })}>Start Building Workshop</Button> </div> </CardContent> </Card> );
+  if (step === 1) {
+    return (
+        <Card className="w-full max-w-2xl mx-auto">
+            <CardHeader><CardTitle>Step 1: Select Data Source</CardTitle><CardDescription>Choose the questionnaire responses you want to analyze.</CardDescription></CardHeader>
+            <CardContent className="space-y-4 pt-4">
+                <Label>Select Client Form</Label>
+                 <Select onValueChange={setSelectedForm} disabled={isLoading || isError}>
+                    <SelectTrigger>
+                        <SelectValue placeholder={isLoading ? "Loading questionnaires..." : "Search and select a questionnaire..."} />
+                    </SelectTrigger>
+                    <SelectContent>
+                        {isError && <SelectItem value="error" disabled>Failed to load questionnaires.</SelectItem>}
+                        {questionnaires?.map((q) => (
+                            <SelectItem key={q.id} value={q.id}>
+                                {q.title} ({q.organization || 'No Client'})
+                            </SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
+                <Button onClick={() => setStep(2)} disabled={!selectedForm} className="w-full">Next: Design Workshop</Button>
+            </CardContent>
+        </Card>
+    );
+  }
+
+  if (step === 2) {
+    return ( <Card className="w-full max-w-3xl mx-auto"> <CardHeader><CardTitle>Step 2: Design Your Workshop Boards</CardTitle><CardDescription>These boards will be used to categorize insights.</CardDescription></CardHeader> <CardContent className="space-y-4 pt-4"> {boards.map((board, index) => ( <div key={board.id} className="flex items-start gap-2 p-3 border rounded-lg bg-muted/30"> <div className="flex-1 grid grid-cols-2 gap-4"> <Input placeholder="Board Name (e.g., Vision)" value={board.name} onChange={e => handleBoardChange(index, 'name', e.target.value)} /> <Textarea placeholder="Short description" value={board.description} onChange={e => handleBoardChange(index, 'description', e.target.value)} rows={1} className="h-10"/> </div> <Button variant="ghost" size="icon" onClick={() => removeBoard(index)}><X className="h-4 w-4"/></Button> </div> ))} <Button variant="outline" onClick={addBoard} className="gap-2"><Plus className="h-4 w-4"/>Add Board</Button> <div className="flex justify-between items-center pt-4"> <Button variant="link" onClick={() => setStep(1)}>Back</Button> <Button onClick={() => onSetupComplete({ formId: selectedForm, boards })}>Start Building Workshop</Button> </div> </CardContent> </Card> );
+  }
+
   return null;
 }
 
+
+// --- Main WorkshopBuilder Page Component ---
 const WorkshopBuilder = () => {
   const { id: workshopId } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
-  const { getToken } = useAuth();
+  const { getToken } = useAuth(); // Getting getToken here to pass it down
   
   const [isSetupComplete, setIsSetupComplete] = useState(!searchParams.get('setup'));
   const [workshopConfig, setWorkshopConfig] = useState<any>(null);
@@ -108,7 +138,6 @@ const WorkshopBuilder = () => {
     onSuccess: (data) => toast.success("Successfully exported to Miro!", { description: "A board has been created/updated.", action: { label: "Open Board", onClick: () => window.open(data.boardUrl, '_blank') }, duration: 10000, }),
     onError: (error: Error) => toast.error("Export Failed", { description: error.message || "An unknown error occurred." }),
   });
-
 
   const handleSetupComplete = (config) => { setWorkshopConfig(config); setIsSetupComplete(true); searchParams.delete('setup'); setSearchParams(searchParams); };
   
@@ -181,7 +210,7 @@ const WorkshopBuilder = () => {
         </header>
         <div className="flex-1 flex items-center justify-center bg-background">
             {!isSetupComplete 
-                ? <WorkshopSetup onSetupComplete={handleSetupComplete} />
+                ? <WorkshopSetup onSetupComplete={handleSetupComplete} getToken={getToken} />
                 : renderBuilder()
             }
         </div>
