@@ -51,8 +51,9 @@ const WorkshopLibrary = () => {
   const { data: workshops, isLoading } = useQuery<Workshop[]>({
     queryKey: ['workshops'],
     queryFn: async () => {
+        // CORRECTED: Use the right endpoint with a query parameter
+        const data = await fetchWithAuth('/api/questionnaires?resource=workshops', {}, getToken);
         // Map snake_case from DB to camelCase for frontend
-        const data = await fetchWithAuth('/api/workshops', {}, getToken);
         return data.map(ws => ({
             ...ws,
             clientName: ws.client_name,
@@ -64,7 +65,7 @@ const WorkshopLibrary = () => {
   });
 
   const createWorkshopMutation = useMutation({
-    mutationFn: (newWorkshop: { name: string, client_name: string }) => fetchWithAuth('/api/workshops', {
+    mutationFn: (newWorkshop: { name: string, client_name: string }) => fetchWithAuth('/api/questionnaires?resource=workshops', { // CORRECTED
       method: 'POST',
       body: JSON.stringify(newWorkshop),
     }, getToken),

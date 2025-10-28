@@ -23,10 +23,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     auth: { persistSession: false }
   });
 
-  const isWorkshopsRequest = req.url?.startsWith('/api/workshops');
+  // CORRECTED: Check for a query parameter instead of the URL path
+  const { resource } = req.query;
 
-  // --- NEW LOGIC FOR WORKSHOPS ---
-  if (isWorkshopsRequest) {
+  // --- LOGIC FOR WORKSHOPS ---
+  if (resource === 'workshops') {
     if (req.method === 'GET') {
       try {
         const { data, error } = await supabase
@@ -59,7 +60,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
   }
 
-  // --- ORIGINAL LOGIC FOR QUESTIONNAIRES ---
+  // --- ORIGINAL LOGIC FOR QUESTIONNAIRES (Default) ---
   else {
     if (req.method === 'GET') {
       const { data, error } = await supabase
