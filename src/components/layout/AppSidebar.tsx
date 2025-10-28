@@ -1,4 +1,5 @@
-import { LayoutDashboard, FileText, Users, Library } from "lucide-react";
+// src/components/layout/AppSidebar.tsx
+import { LayoutDashboard, FileText, Users, Library, Sparkles } from "lucide-react";
 import { NavLink } from "react-router-dom";
 import {
   Sidebar,
@@ -14,6 +15,7 @@ import logo from "@/assets/logo.png";
 
 const menuItems = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
+  { title: "Workshops", url: "/workshops", icon: Sparkles },
   { title: "Active Forms", url: "/active-forms", icon: FileText },
   { title: "Clients", url: "/clients", icon: Users },
   { title: "Discovery Library", url: "/discovery-library", icon: Library },

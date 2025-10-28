@@ -16,12 +16,13 @@ import ClientForm from "./pages/ClientForm";
 import QuestionnaireDetail from "./pages/QuestionnaireDetail";
 import FormPreview from "./pages/FormPreview";
 import Clients from "./pages/Clients";
-// ClientDetailPage is no longer needed
 import ActiveForms from "./pages/ActiveForms";
 import DiscoveryLibrary from "./pages/DiscoveryLibrary";
 import SignInPage from "./pages/SignInPage";
 import SignUpPage from "./pages/SignUpPage";
 import NotFound from "./pages/NotFound";
+import WorkshopLibrary from "./pages/workshop/WorkshopLibrary";
+import WorkshopBuilder from "./pages/workshop/WorkshopBuilder";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -75,11 +76,12 @@ const App = () => (
             
             {/* Protected Routes */}
             <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+            <Route path="/workshops" element={<ProtectedRoute><WorkshopLibrary /></ProtectedRoute>} />
+            <Route path="/workshops/:id" element={<ProtectedRoute><WorkshopBuilder /></ProtectedRoute>} />
             <Route path="/builder/:id" element={<ProtectedRoute><Builder /></ProtectedRoute>} />
             <Route path="/questionnaire/:id" element={<ProtectedRoute><QuestionnaireDetail /></ProtectedRoute>} />
             <Route path="/form-preview/:id" element={<ProtectedRoute><FormPreview /></ProtectedRoute>} />
             <Route path="/clients" element={<ProtectedRoute><Clients /></ProtectedRoute>} />
-            {/* REMOVED: The client detail route is no longer needed */}
             <Route path="/active-forms" element={<ProtectedRoute><ActiveForms /></ProtectedRoute>} />
             <Route path="/discovery-library" element={<ProtectedRoute><DiscoveryLibrary /></ProtectedRoute>} />
             

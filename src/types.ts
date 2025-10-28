@@ -48,3 +48,33 @@ export interface Response {
     submitted_at: string;
     answers: Record<string, string | number | string[]>;
 }
+
+export interface Workshop {
+  id: string;
+  name: string;
+  clientName: string;
+  questionnaireId: string;
+  status: 'draft' | 'in-progress' | 'completed';
+  createdAt: string;
+  updatedAt: string;
+  insightCount: number;
+}
+
+export interface WorkshopBoard {
+  id: string;
+  name:string;
+  description: string;
+}
+
+export interface Insight {
+  id: string; // Corresponds to the original response answer's unique ID
+  questionId: string;
+  questionPrompt: string;
+  sectionTitle: string;
+  answer: string;
+  respondentId: string;
+  aiSummary: string;
+  aiHeading: string;
+  boardCategory?: string; // The ID of the WorkshopBoard it's assigned to
+  tags: string[];
+}
